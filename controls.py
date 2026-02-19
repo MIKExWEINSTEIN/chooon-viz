@@ -324,6 +324,7 @@ class ControlPanel:
         path = filedialog.askopenfilename(
             title="Select image",
             filetypes=[
+                ("PNG images",  "*.png"),
                 ("Image files",
                  "*.png *.jpg *.jpeg *.gif *.bmp *.webp *.tiff *.tif "
                  "*.ico *.ppm *.pgm *.pbm *.pnm"),
