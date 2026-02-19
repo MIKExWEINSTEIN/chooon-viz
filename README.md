@@ -79,6 +79,10 @@ python3 --version
 # If you see 3.14 or higher, install 3.13 via Homebrew:
 brew install python@3.13
 
+# Homebrew Python 3.13 does NOT include Tcl/Tk (needed for the control panel)
+# Install it explicitly — this step is required:
+brew install python-tk@3.13
+
 # Install system dependency for audio
 brew install portaudio
 
@@ -86,8 +90,8 @@ brew install portaudio
 git clone https://github.com/MIKExWEINSTEIN/chooon-viz.git chooon-viz
 cd chooon-viz                          # make sure you cd into chooon-viz
 
-# Create a virtual environment (use python3.13 if you just installed it)
-python3.13 -m venv .venv              # or: python3 -m venv .venv
+# Create a virtual environment with Python 3.13
+python3.13 -m venv .venv
 source .venv/bin/activate
 
 # Install all dependencies
@@ -547,6 +551,19 @@ The kaleidoscope preprocessing is a one-time numpy operation at load time
 ### `ImportError: No module named 'pyaudio'`
 - Install the portaudio system library first, then reinstall pyaudio.
   See [Installation](#installation).
+
+### `ModuleNotFoundError: No module named '_tkinter'`
+
+The control panel uses Tkinter, which Homebrew's `python@3.13` does not
+include by default.  Fix — install the Tk package and restart the app:
+
+```bash
+brew install python-tk@3.13
+python3 main.py --windowed
+```
+
+No need to recreate the venv; Homebrew drops the `_tkinter` extension directly
+into the Python 3.13 installation that your venv links back to.
 
 ### `ModuleNotFoundError: No module named 'pygame'`
 - Run `pip install -r requirements.txt` inside the correct virtual
