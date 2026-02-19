@@ -37,63 +37,110 @@ outline that reacts to the music.
 
 ## Requirements
 
-| Component     | Version  |
-|---------------|----------|
-| Python        | ≥ 3.10   |
-| pygame        | ≥ 2.5    |
-| pyaudio       | ≥ 0.2.14 |
-| numpy         | ≥ 1.24   |
-| Pillow        | ≥ 10.0   |
-| scipy         | ≥ 1.11   |
+| Component     | Version          |
+|---------------|------------------|
+| Python        | 3.10 – 3.13 ⚠️   |
+| pygame        | ≥ 2.5            |
+| pyaudio       | ≥ 0.2.14         |
+| numpy         | ≥ 1.24           |
+| Pillow        | ≥ 10.0           |
+| scipy         | ≥ 1.11           |
 
-**System library** (required before installing pyaudio):
+> ⚠️ **Python 3.14 is not yet supported.**  pygame 2.6.x does not ship
+> pre-built wheels for Python 3.14, and building from source requires SDL2
+> headers that are not included with Xcode.  Use Python **3.12 or 3.13**
+> (both have ready-made pygame wheels for macOS Apple Silicon and Intel).
+
+**System libraries** (install these *before* running `pip install`):
 
 ```bash
+# macOS (Homebrew) — installs portaudio for pyaudio
+brew install portaudio
+
 # Debian / Ubuntu
 sudo apt install portaudio19-dev
 
-# macOS (Homebrew)
-brew install portaudio
-
-# Windows – pre-built wheels are available; no extra step usually needed
+# Windows – pre-built wheels cover everything; no extra step needed
 ```
 
 ---
 
 ## Installation
 
+### macOS (Apple Silicon or Intel)
+
+macOS does not ship Python 3 as `python` — you must use `python3`.
+Also check your Python version first: **3.14+ will fail** (see Requirements).
+
 ```bash
-# 1. Clone / download the project
-git clone <repo-url> chooon-viz
-cd chooon-viz
+# Check your version — must be 3.10–3.13
+python3 --version
 
-# 2. (Recommended) create a virtual environment
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+# If you see 3.14 or higher, install 3.13 via Homebrew:
+brew install python@3.13
 
-# 3. Install Python dependencies
+# Install system dependency for audio
+brew install portaudio
+
+# Clone the repo — note the spelling: three o's in chooon
+git clone https://github.com/MIKExWEINSTEIN/chooon-viz.git chooon-viz
+cd chooon-viz                          # make sure you cd into chooon-viz
+
+# Create a virtual environment (use python3.13 if you just installed it)
+python3.13 -m venv .venv              # or: python3 -m venv .venv
+source .venv/bin/activate
+
+# Install all dependencies
 pip install -r requirements.txt
+
+# Run
+python3 main.py --windowed
+```
+
+### Linux (Debian / Ubuntu)
+
+```bash
+sudo apt install portaudio19-dev
+git clone https://github.com/MIKExWEINSTEIN/chooon-viz.git chooon-viz
+cd chooon-viz
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python3 main.py
+```
+
+### Windows
+
+```powershell
+git clone https://github.com/MIKExWEINSTEIN/chooon-viz.git chooon-viz
+cd chooon-viz
+python -m venv .venv
+.venv\Scripts\activate
+pip install -r requirements.txt
+python main.py --windowed
 ```
 
 ---
 
 ## Quick start
 
+> On **macOS / Linux** replace `python` with `python3` in all commands below.
+
 ```bash
 # Fullscreen on the primary monitor
-python main.py
+python3 main.py
 
-# Resizable window (good for development)
-python main.py --windowed
+# Resizable window (good for first launch / development)
+python3 main.py --windowed
 
 # Specific window size
-python main.py --windowed --width 1920 --height 1080
+python3 main.py --windowed --width 1920 --height 1080
 
 # Without the control panel (pure visuals)
-python main.py --no-controls
+python3 main.py --no-controls
 
-# Specific audio device (see --list-devices if you add it, or check the panel)
-python main.py --device 2
+# Specific audio device (check the Audio Input dropdown in the control panel)
+python3 main.py --device 2
 ```
 
 Once running:
@@ -503,7 +550,39 @@ The kaleidoscope preprocessing is a one-time numpy operation at load time
 
 ### `ModuleNotFoundError: No module named 'pygame'`
 - Run `pip install -r requirements.txt` inside the correct virtual
-  environment.
+  environment (confirm the venv is active — your prompt should start with
+  `(.venv)`).
+- If pygame failed to build during `pip install`, see the SDL.h entry below.
+
+### `fatal error: 'SDL.h' file not found` / pygame build failure
+
+This almost always means **Python 3.14** is being used.  pygame 2.6.x has no
+pre-built wheel for Python 3.14 and the source build requires SDL2 headers
+that aren't readily available.
+
+Fix — switch to Python 3.13:
+
+```bash
+# Install Python 3.13 via Homebrew (macOS)
+brew install python@3.13
+
+# Remove the broken venv and recreate with 3.13
+deactivate
+rm -rf .venv
+python3.13 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python3 main.py --windowed
+```
+
+Verify the right Python is active before installing:
+```bash
+python3 --version   # should print 3.13.x, not 3.14.x
+```
+
+### `-bash: cd: chooon-viz: No such file or directory`
+- The repo name has **three o's**: `chooon-viz`.  Double-check the folder
+  name with `ls` and use `cd chooon-viz` (three o's).
 
 ---
 
