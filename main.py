@@ -3,9 +3,13 @@
 main.py - chooon-viz entry point.
 
 Launches:
-  • PyAudio capture thread  (audio.py)
-  • Tkinter control panel   (controls.py)
+  • PyAudio capture thread    (audio.py)
+  • Tkinter control panel     (controls.py) — as a separate process
   • Pygame fullscreen render loop (visuals.py)
+
+The control panel runs in its own process so that tkinter's NSApplication
+and pygame's SDLApplication never share the same macOS process, which
+previously caused an NSInvalidArgumentException crash.
 
 Usage
 -----
@@ -21,15 +25,18 @@ Flags
 """
 
 import argparse
+import multiprocessing
 import queue
 import sys
+import threading
 import time
 
 import pygame
 
 from audio    import AudioAnalyzer
-from controls import (ControlPanel, EVT_QUIT, EVT_LOAD_IMAGE,
-                       EVT_CLEAR_IMAGE, EVT_REBUILD_OVERLAY)
+from controls import (run_panel, CMD_SET_DEVICES,
+                      EVT_QUIT, EVT_LOAD_IMAGE,
+                      EVT_CLEAR_IMAGE, EVT_REBUILD_OVERLAY, EVT_SET_PARAM)
 from visuals  import Visualizer, PALETTE_NAMES
 
 
@@ -75,7 +82,10 @@ def parse_args():
 def main():
     args   = parse_args()
     params = dict(DEFAULT_PARAMS)
-    events : queue.Queue = queue.Queue()
+
+    # multiprocessing queues work across process boundaries
+    events_q   = multiprocessing.Queue()   # panel → main
+    commands_q = multiprocessing.Queue()   # main → panel
 
     # ── pygame display ────────────────────────────────────────────────────────
     pygame.init()
@@ -95,20 +105,23 @@ def main():
     analyzer = AudioAnalyzer(device_index=args.device)
     analyzer.start()
 
-    # ── control panel ─────────────────────────────────────────────────────────
-    panel: ControlPanel | None = None
+    # ── control panel (separate process) ──────────────────────────────────────
+    panel_proc = None
     if not args.no_controls:
-        panel = ControlPanel(params, events)
-        panel.start()
+        panel_proc = multiprocessing.Process(
+            target=run_panel,
+            args=(events_q, commands_q, params),
+            daemon=True,
+            name="ControlPanel",
+        )
+        panel_proc.start()
 
         # Populate device list once the panel is up
-        import threading
         def _populate():
-            time.sleep(0.4)   # give tkinter a moment to initialise
+            time.sleep(0.6)   # give the subprocess a moment to initialise
             try:
                 devices = analyzer.list_input_devices()
-                if panel:
-                    panel.set_devices(devices)
+                commands_q.put({"type": CMD_SET_DEVICES, "devices": devices})
             except Exception:
                 pass
         threading.Thread(target=_populate, daemon=True).start()
@@ -125,7 +138,7 @@ def main():
         dt  = min(now - prev_t, 0.05)   # cap at 50 ms to avoid spiral
         prev_t = now
 
-        # ── pygame events ────────────────────────────────────────────────────
+        # ── pygame events ─────────────────────────────────────────────────────
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
@@ -158,31 +171,32 @@ def main():
                 elif event.key == pygame.K_o:
                     params["outline_enabled"] = not params.get("outline_enabled", False)
                 elif event.key == pygame.K_s:
-                    # cycle symmetry mode
                     from visuals import SYMMETRY_MODES
                     idx = SYMMETRY_MODES.index(params.get("symmetry_mode", "None"))
                     params["symmetry_mode"] = SYMMETRY_MODES[(idx + 1) % len(SYMMETRY_MODES)]
                     vis.rebuild_overlay()
             elif event.type == pygame.VIDEORESIZE:
-                # Update visualiser surface reference on resize
                 screen = pygame.display.get_surface()
                 vis.surface = screen
                 vis.W, vis.H = screen.get_size()
                 vis.cx, vis.cy = vis.W // 2, vis.H // 2
 
-        # ── control panel events ──────────────────────────────────────────────
+        # ── control panel events ───────────────────────────────────────────────
         try:
             while True:
-                ev = events.get_nowait()
-                if ev["type"] == EVT_QUIT:
+                ev = events_q.get_nowait()
+                t = ev["type"]
+                if t == EVT_QUIT:
                     running = False
-                elif ev["type"] == EVT_LOAD_IMAGE:
+                elif t == EVT_SET_PARAM:
+                    params[ev["key"]] = ev["value"]
+                elif t == EVT_LOAD_IMAGE:
                     vis.load_image(ev["path"])
-                elif ev["type"] == EVT_CLEAR_IMAGE:
+                elif t == EVT_CLEAR_IMAGE:
                     vis.clear_image()
-                elif ev["type"] == EVT_REBUILD_OVERLAY:
+                elif t == EVT_REBUILD_OVERLAY:
                     vis.rebuild_overlay()
-                elif ev["type"] == "set_device":
+                elif t == "set_device":
                     idx = ev.get("index")
                     analyzer.stop()
                     analyzer = AudioAnalyzer(device_index=idx)
@@ -190,12 +204,15 @@ def main():
         except queue.Empty:
             pass
 
+        # If the user closed the control panel window, quit
+        if panel_proc is not None and not panel_proc.is_alive():
+            running = False
+
         # ── render ────────────────────────────────────────────────────────────
         audio = analyzer.get()
         vis.update(audio, dt)
         vis.draw(audio)
 
-        # ── HUD overlay ───────────────────────────────────────────────────────
         if params.get("show_hud", False):
             _draw_hud(screen, font, params, audio, clock)
 
@@ -204,8 +221,9 @@ def main():
 
     # ── cleanup ───────────────────────────────────────────────────────────────
     analyzer.stop()
-    if panel:
-        panel.stop()
+    if panel_proc and panel_proc.is_alive():
+        panel_proc.terminate()
+        panel_proc.join(timeout=2)
     pygame.quit()
     sys.exit(0)
 
@@ -242,4 +260,5 @@ def _draw_hud(surface, font, params, audio, clock):
 
 
 if __name__ == "__main__":
+    multiprocessing.freeze_support()   # needed for macOS/Windows bundled apps
     main()
