@@ -28,6 +28,7 @@ from PIL import Image, ImageFilter
 from scipy.ndimage import sobel
 
 from audio import AudioData, BANDS
+from constants import PALETTE_NAMES, SYMMETRY_MODES
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -46,19 +47,6 @@ PALETTES = {
     "Forest":  lambda h: (0.30 + h * 0.15,0.7,               0.3 + h * 0.7),
     "Sunset":  lambda h: (0.02 + h * 0.12,0.9,               0.9),
 }
-PALETTE_NAMES = list(PALETTES.keys())
-
-# ── symmetry modes ────────────────────────────────────────────────────────────
-
-SYMMETRY_MODES = [
-    "None",           # original image
-    "Mirror H",       # left half reflected right  (vertical axis)
-    "Mirror V",       # top half reflected down    (horizontal axis)
-    "4-Way",          # top-left quadrant × 4
-    "Kaleidoscope 4", # 4-segment polar kaleidoscope
-    "Kaleidoscope 8", # 8-segment polar kaleidoscope (classic)
-]
-
 # Max pixel budget for internal processing (keeps numpy fast on any input res)
 _MAX_PROCESS_PX = 1024
 

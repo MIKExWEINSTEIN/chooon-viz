@@ -16,7 +16,7 @@ import tkinter as tk
 from tkinter import ttk, filedialog
 from typing import Optional
 
-from visuals import PALETTE_NAMES, SYMMETRY_MODES
+from constants import PALETTE_NAMES, SYMMETRY_MODES
 
 
 # ── events sent panel → main ──────────────────────────────────────────────────

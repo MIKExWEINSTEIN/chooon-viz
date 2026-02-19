@@ -87,6 +87,25 @@ def main():
     events_q   = multiprocessing.Queue()   # panel → main
     commands_q = multiprocessing.Queue()   # main → panel
 
+    # ── control panel (separate process) ──────────────────────────────────────
+    # IMPORTANT: start the subprocess BEFORE pygame.init().
+    # pygame.init() calls SDL_Init which replaces NSApplication with
+    # SDLApplication.  On macOS, if the fork for the subprocess happens after
+    # that point (even with the "spawn" start method, which uses fork+exec
+    # internally on POSIX), the forked child briefly inherits the replaced
+    # NSApplication and that can corrupt system-level Objective-C state.
+    # Starting first guarantees a clean fork, and since controls.py now only
+    # imports `constants` (no pygame/SDL), the subprocess never loads SDL at all.
+    panel_proc = None
+    if not args.no_controls:
+        panel_proc = multiprocessing.Process(
+            target=run_panel,
+            args=(events_q, commands_q, params),
+            daemon=True,
+            name="ControlPanel",
+        )
+        panel_proc.start()
+
     # ── pygame display ────────────────────────────────────────────────────────
     pygame.init()
     pygame.display.set_caption("chooon-viz")
@@ -105,18 +124,8 @@ def main():
     analyzer = AudioAnalyzer(device_index=args.device)
     analyzer.start()
 
-    # ── control panel (separate process) ──────────────────────────────────────
-    panel_proc = None
-    if not args.no_controls:
-        panel_proc = multiprocessing.Process(
-            target=run_panel,
-            args=(events_q, commands_q, params),
-            daemon=True,
-            name="ControlPanel",
-        )
-        panel_proc.start()
-
-        # Populate device list once the panel is up
+    # Populate device list once the panel is up
+    if not args.no_controls and panel_proc is not None:
         def _populate():
             time.sleep(0.6)   # give the subprocess a moment to initialise
             try:
@@ -260,5 +269,8 @@ def _draw_hud(surface, font, params, audio, clock):
 
 
 if __name__ == "__main__":
+    # "spawn" gives a clean Python interpreter with no inherited SDL/AppKit
+    # state.  Must be called before any multiprocessing objects are created.
+    multiprocessing.set_start_method("spawn")
     multiprocessing.freeze_support()   # needed for macOS/Windows bundled apps
     main()
