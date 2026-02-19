@@ -142,7 +142,7 @@ class ControlPanel:
 
         # ── Title ─────────────────────────────────────────────────────────────
         tk.Label(root, text="chooon-viz", font=("Courier", 16, "bold"),
-                 bg=BG, fg=SL).pack(**pad, pady=(12, 0))
+                 bg=BG, fg=SL).pack(padx=10, pady=(12, 0))
 
         self._sep(root)
 
@@ -287,7 +287,7 @@ class ControlPanel:
 
         # ── Quit ───────────────────────────────────────────────────────────────
         ttk.Button(root, text="Quit", command=self._on_close).pack(
-            **pad, pady=(0, 14))
+            padx=10, pady=(0, 14))
 
     # ── layout helpers ────────────────────────────────────────────────────────
 
