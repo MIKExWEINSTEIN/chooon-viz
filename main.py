@@ -28,20 +28,28 @@ import time
 import pygame
 
 from audio    import AudioAnalyzer
-from controls import ControlPanel, EVT_QUIT, EVT_LOAD_IMAGE, EVT_CLEAR_IMAGE
+from controls import (ControlPanel, EVT_QUIT, EVT_LOAD_IMAGE,
+                       EVT_CLEAR_IMAGE, EVT_REBUILD_OVERLAY)
 from visuals  import Visualizer, PALETTE_NAMES
 
 
 # ── defaults ─────────────────────────────────────────────────────────────────
 
 DEFAULT_PARAMS = {
-    "speed":           1.0,
-    "intensity":       1.0,
-    "palette":         PALETTE_NAMES[0],
-    "show_plasma":     True,
-    "show_waveform":   True,
-    "show_particles":  True,
-    "show_spectrum":   True,
+    # animation
+    "speed":            1.0,
+    "intensity":        1.0,
+    "palette":          PALETTE_NAMES[0],
+    # layers
+    "show_plasma":      True,
+    "show_waveform":    True,
+    "show_particles":   True,
+    "show_spectrum":    True,
+    # image transforms
+    "symmetry_mode":    "None",
+    "outline_enabled":  False,
+    "outline_strength": 1.0,
+    "outline_glow":     True,
 }
 
 TARGET_FPS = 60
@@ -147,6 +155,14 @@ def main():
                     params["palette"] = PALETTE_NAMES[(idx + 1) % len(PALETTE_NAMES)]
                 elif event.key == pygame.K_h:
                     _toggle_help(params)
+                elif event.key == pygame.K_o:
+                    params["outline_enabled"] = not params.get("outline_enabled", False)
+                elif event.key == pygame.K_s:
+                    # cycle symmetry mode
+                    from visuals import SYMMETRY_MODES
+                    idx = SYMMETRY_MODES.index(params.get("symmetry_mode", "None"))
+                    params["symmetry_mode"] = SYMMETRY_MODES[(idx + 1) % len(SYMMETRY_MODES)]
+                    vis.rebuild_overlay()
             elif event.type == pygame.VIDEORESIZE:
                 # Update visualiser surface reference on resize
                 screen = pygame.display.get_surface()
@@ -164,6 +180,8 @@ def main():
                     vis.load_image(ev["path"])
                 elif ev["type"] == EVT_CLEAR_IMAGE:
                     vis.clear_image()
+                elif ev["type"] == EVT_REBUILD_OVERLAY:
+                    vis.rebuild_overlay()
                 elif ev["type"] == "set_device":
                     idx = ev.get("index")
                     analyzer.stop()
@@ -207,9 +225,11 @@ def _draw_hud(surface, font, params, audio, clock):
         f"Volume:    {audio.volume:.2f}",
         f"Beat:      {'●' if audio.beat else '○'}  ({audio.beat_strength:.2f})",
         f"Dom freq:  {audio.dominant_freq:.0f} Hz",
+        f"Symmetry:  {params.get('symmetry_mode','None')}",
+        f"Outline:   {'on' if params.get('outline_enabled') else 'off'}",
         "",
         "ESC quit  F fullscreen  H toggle HUD",
-        "1-4 layers  P palette",
+        "1-4 layers  P palette  O outline  S symmetry",
         "↑↓ intensity  ←→ speed",
     ]
     x, y = 12, 12
