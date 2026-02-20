@@ -1,31 +1,10 @@
 """
-audio.py - Real-time audio capture, analysis, and WebSocket broadcast.
+audio.py - Real-time audio capture and analysis for chooon-viz.
 
 Captures audio from the default input device, computes FFT, detects beats,
 and exposes a thread-safe AudioData snapshot for the renderer to consume.
-
-WebSocket server
-----------------
-A WebSocket server runs on ws://localhost:8765 in a private background thread
-(its own asyncio event loop).  Every time a new frame is analysed the server
-broadcasts a JSON message to all connected clients:
-
-    {
-        "beat":          bool,
-        "beat_strength": float  (0..1),
-        "volume":        float  (0..1),
-        "band_energy":   [float, float, float, float, float, float],
-        "dominant_freq": float  (Hz)
-    }
-
-Clients that disconnect are silently removed.  If no clients are connected
-the broadcast is a no-op.
-
-Run standalone
---------------
-    python3 audio.py [--device N] [--port PORT]
-
-Prints a live status line and serves the WebSocket until Ctrl-C.
+Also runs a WebSocket server on ws://localhost:8765 that broadcasts every
+analysed frame as JSON to all connected clients.
 """
 
 import asyncio
@@ -33,13 +12,7 @@ import json
 import threading
 import numpy as np
 import pyaudio
-
-try:
-    import websockets
-    _WS_AVAILABLE = True
-except ImportError:
-    _WS_AVAILABLE = False
-    print("[AudioAnalyzer] 'websockets' not installed — WebSocket server disabled.")
+import websockets
 
 # ── constants ────────────────────────────────────────────────────────────────
 SAMPLE_RATE   = 44100
@@ -59,6 +32,53 @@ BANDS = [
 
 # Beat detection – energy history window (# chunks)
 BEAT_HISTORY  = 43   # ~1 s worth at 44100/1024
+
+# ── module-level WebSocket state ──────────────────────────────────────────────
+_ws_clients: set = set()
+_ws_loop: asyncio.AbstractEventLoop | None = None
+
+
+async def _ws_handler(ws):
+    """Accept a new connection and keep it alive until the client disconnects."""
+    _ws_clients.add(ws)
+    try:
+        await ws.wait_closed()
+    finally:
+        _ws_clients.discard(ws)
+
+
+async def _broadcast(msg: str):
+    """Send *msg* to every connected client; silently drop dead connections."""
+    dead = set()
+    for ws in list(_ws_clients):
+        try:
+            await ws.send(msg)
+        except Exception:
+            dead.add(ws)
+    _ws_clients -= dead
+
+
+def start_ws_server(port: int = 8765):
+    """
+    Start the WebSocket server in a background daemon thread.
+    The thread owns its own asyncio event loop so it never interferes
+    with the audio capture thread or any caller event loop.
+    """
+    global _ws_loop
+
+    def _run():
+        global _ws_loop
+        _ws_loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(_ws_loop)
+
+        async def _serve():
+            async with websockets.serve(_ws_handler, "localhost", port):
+                await asyncio.Future()   # run until loop.stop()
+
+        _ws_loop.run_until_complete(_serve())
+
+    t = threading.Thread(target=_run, daemon=True, name="ws-server")
+    t.start()
 
 
 class AudioData:
@@ -96,17 +116,11 @@ class AudioAnalyzer:
     Opens a PyAudio stream and continuously analyses the incoming audio.
 
     Thread-safe: call ``get()`` from the render thread at any time.
-
-    A WebSocket server on ``ws://localhost:<port>`` broadcasts each frame to
-    connected clients as JSON.  The server runs in its own daemon thread with
-    a private asyncio event loop so it never interferes with the capture loop
-    or the caller's event loop.
     """
 
-    def __init__(self, device_index=None, ws_port=8765):
+    def __init__(self, device_index=None):
         self._pa             = pyaudio.PyAudio()
         self._device_index   = device_index   # None → default input
-        self._ws_port        = ws_port
         self._lock           = threading.Lock()
         self._current        = _SILENT
         self._running        = False
@@ -124,34 +138,21 @@ class AudioAnalyzer:
         # Smoothed band energies (prevent flickering)
         self._smooth_energy  = np.zeros(len(BANDS), dtype=np.float64)
 
-        # WebSocket state — owned by _ws_thread / _ws_loop
-        self._ws_loop        = None          # asyncio event loop (WS thread)
-        self._ws_clients     = set()         # connected WebSocketServerProtocol
-        self._ws_thread      = None
-
     # ── public API ──────────────────────────────────────────────────────────
 
     def start(self):
-        """Start the audio capture thread and the WebSocket server thread."""
+        """Start the background capture thread."""
         if self._running:
             return
         self._running = True
         self._thread = threading.Thread(target=self._capture_loop, daemon=True)
         self._thread.start()
-        if _WS_AVAILABLE:
-            self._ws_thread = threading.Thread(
-                target=self._run_ws_server, daemon=True, name="WS-server"
-            )
-            self._ws_thread.start()
 
     def stop(self):
-        """Stop the audio capture thread (WS thread is daemon — exits with process)."""
+        """Stop the background capture thread."""
         self._running = False
         if self._thread:
             self._thread.join(timeout=2.0)
-        # Signal the WS event loop to stop so the thread can exit cleanly
-        if self._ws_loop and self._ws_loop.is_running():
-            self._ws_loop.call_soon_threadsafe(self._ws_loop.stop)
 
     def get(self) -> AudioData:
         """Return the latest AudioData snapshot (never blocks)."""
@@ -166,62 +167,6 @@ class AudioAnalyzer:
             if info["maxInputChannels"] > 0:
                 devices.append((i, info["name"]))
         return devices
-
-    # ── WebSocket server ─────────────────────────────────────────────────────
-
-    def _run_ws_server(self):
-        """
-        Runs in a dedicated daemon thread.
-        Creates a private asyncio event loop and hosts the WebSocket server
-        for the lifetime of the process.
-        """
-        self._ws_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self._ws_loop)
-
-        async def handler(ws):
-            self._ws_clients.add(ws)
-            try:
-                await ws.wait_closed()
-            finally:
-                self._ws_clients.discard(ws)
-
-        async def serve():
-            try:
-                async with websockets.serve(handler, "localhost", self._ws_port):
-                    print(f"[AudioAnalyzer] WebSocket server on ws://localhost:{self._ws_port}")
-                    await asyncio.Future()   # run until loop.stop() is called
-            except OSError as exc:
-                print(f"[AudioAnalyzer] WebSocket server could not start: {exc}")
-
-        self._ws_loop.run_until_complete(serve())
-
-    def _broadcast(self, data: AudioData):
-        """
-        Called from the capture thread after each analysis frame.
-        Schedules a coroutine on the WS event loop to send to all clients.
-        Thread-safe: uses run_coroutine_threadsafe so no shared-state races.
-        """
-        if not _WS_AVAILABLE or not self._ws_clients or self._ws_loop is None:
-            return
-
-        msg = json.dumps({
-            "beat":          bool(data.beat),
-            "beat_strength": round(float(data.beat_strength), 3),
-            "volume":        round(float(data.volume), 3),
-            "band_energy":   [round(float(v), 3) for v in data.band_energy],
-            "dominant_freq": round(float(data.dominant_freq), 1),
-        })
-
-        async def _send_all():
-            dead = set()
-            for ws in list(self._ws_clients):
-                try:
-                    await ws.send(msg)
-                except Exception:
-                    dead.add(ws)
-            self._ws_clients -= dead
-
-        asyncio.run_coroutine_threadsafe(_send_all(), self._ws_loop)
 
     # ── internals ───────────────────────────────────────────────────────────
 
@@ -259,8 +204,6 @@ class AudioAnalyzer:
             data = self._analyse(buf)
             with self._lock:
                 self._current = data
-
-            self._broadcast(data)   # non-blocking: schedules on WS loop
 
         stream.stop_stream()
         stream.close()
@@ -312,7 +255,7 @@ class AudioAnalyzer:
         dom_idx      = int(np.argmax(spectrum))
         dominant_freq = float(freqs[dom_idx]) if dom_idx < len(freqs) else 0.0
 
-        return AudioData(
+        result = AudioData(
             raw_fft        = norm_fft,
             band_energy    = band_energy,
             beat           = beat,
@@ -321,39 +264,29 @@ class AudioAnalyzer:
             dominant_freq  = dominant_freq,
         )
 
+        # ── WebSocket broadcast ──────────────────────────────────────────────
+        if _ws_loop is not None and _ws_clients:
+            msg = json.dumps({
+                "beat":          bool(result.beat),
+                "beat_strength": round(float(result.beat_strength), 3),
+                "volume":        round(float(result.volume), 3),
+                "band_energy":   [round(float(v), 3) for v in result.band_energy],
+                "dominant_freq": round(float(result.dominant_freq), 1),
+            })
+            asyncio.run_coroutine_threadsafe(_broadcast(msg), _ws_loop)
+
+        return result
+
 
 # ── standalone entry point ───────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    import argparse
     import time
 
-    p = argparse.ArgumentParser(description="chooon-viz audio analyser + WebSocket server")
-    p.add_argument("--device", type=int, default=None, help="PyAudio input device index")
-    p.add_argument("--port",   type=int, default=8765,  help="WebSocket port (default 8765)")
-    args = p.parse_args()
-
-    analyzer = AudioAnalyzer(device_index=args.device, ws_port=args.port)
+    analyzer = AudioAnalyzer()
+    start_ws_server()
     analyzer.start()
+    print("Audio WebSocket server running on ws://localhost:8765")
 
-    print("Capturing audio.  Ctrl-C to stop.")
-    print("Connect a WebSocket client to see live data.\n")
-
-    band_labels = ["sub", "bas", "lmid", "mid", "hi", "air"]
-
-    try:
-        while True:
-            time.sleep(0.1)
-            a = analyzer.get()
-            bars = "  ".join(
-                f"{lbl}={v:.2f}" for lbl, v in zip(band_labels, a.band_energy)
-            )
-            beat_marker = "BEAT" if a.beat else "    "
-            print(
-                f"\r  {beat_marker}  vol={a.volume:.2f}  {bars}  "
-                f"f={a.dominant_freq:6.0f}Hz    ",
-                end="", flush=True,
-            )
-    except KeyboardInterrupt:
-        print("\nStopping.")
-        analyzer.stop()
+    while True:
+        time.sleep(1)
