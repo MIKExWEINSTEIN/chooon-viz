@@ -52,7 +52,14 @@
     #counter.clickable         { cursor: pointer; color: rgba(255,255,255,0.7); }
     #counter.clickable:hover   { color: #fff; }
 
-    /* ── Vignette handle ── */
+    /* ── Ellipse outline overlay canvas ── */
+    #overlay-canvas {
+      position: fixed; inset: 0;
+      pointer-events: none;
+      z-index: 1;
+    }
+
+    /* ── Vignette center handle ── */
     #v-handle {
       position: fixed;
       width: 20px; height: 20px; border-radius: 50%;
@@ -60,16 +67,32 @@
       background: rgba(255,255,255,0.2);
       transform: translate(-50%, -50%);
       cursor: grab;
+      z-index: 2;
       transition: opacity 0.25s;
       box-shadow: 0 0 8px rgba(0,0,0,0.7), 0 0 0 1px rgba(0,0,0,0.3);
     }
     #v-handle:active { cursor: grabbing; }
+
+    /* ── Vignette edge handle (scale + ellipseRatio) ── */
+    #v-edge-handle {
+      position: fixed;
+      width: 13px; height: 13px; border-radius: 50%;
+      border: 1.5px solid rgba(255,255,255,0.75);
+      background: rgba(255,255,255,0.1);
+      transform: translate(-50%, -50%);
+      cursor: grab;
+      z-index: 2;
+      transition: opacity 0.25s;
+      box-shadow: 0 0 6px rgba(0,0,0,0.7), 0 0 0 1px rgba(0,0,0,0.3);
+    }
+    #v-edge-handle:active { cursor: grabbing; }
 
     /* ── Setup controls ── */
     #setup-controls {
       position: fixed; bottom: 24px;
       left: 50%; transform: translateX(-50%);
       display: flex; gap: 10px;
+      z-index: 3;
       transition: opacity 0.3s;
     }
     #setup-controls button {
@@ -122,8 +145,11 @@
   <div id="drop-label">Drop photos or a folder to begin</div>
 </div>
 
+<canvas id="overlay-canvas"></canvas>
+
 <div id="counter"         class="hidden"></div>
 <div id="v-handle"        class="hidden"></div>
+<div id="v-edge-handle"   class="hidden"></div>
 <div id="setup-controls"  class="hidden">
   <button id="btn-skip">Skip</button>
   <button id="btn-lock">Lock Vignette</button>
@@ -149,8 +175,9 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  resizeOverlayCanvas();
   resizePhoto();
-  updateHandle();
+  updateAllHandles();
 });
 
 function animate() {
@@ -170,7 +197,9 @@ function setStatus(connected) {
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Elliptical vignette shader
-// uVignetteAspect = imgW/imgH — landscape gets wide oval, portrait gets tall oval
+// uVignetteAspect = imgW/imgH  — makes oval match photo proportions
+// uEllipseRatio   = user ratio — independently squash/stretch the oval
+//   > 1 → wider ellipse, < 1 → taller ellipse
 // ═══════════════════════════════════════════════════════════════════════════════
 const vertexShader = /* glsl */`
   varying vec2 vUv;
@@ -182,19 +211,20 @@ const vertexShader = /* glsl */`
 
 const fragmentShader = /* glsl */`
   uniform sampler2D uTexture;
-  uniform vec2  uVignetteCenter; // 0..1 UV
-  uniform float uVignetteAspect; // imgW / imgH
-  uniform float uVignetteScale;  // overall size multiplier
+  uniform vec2  uVignetteCenter; // UV 0..1
+  uniform float uVignetteAspect; // imgW / imgH  (photo shape)
+  uniform float uVignetteScale;  // overall size — larger = smaller ellipse
+  uniform float uEllipseRatio;   // user h:w adjustment (default 1.0)
 
   varying vec2 vUv;
 
   void main() {
     vec4 texColor = texture2D(uTexture, vUv);
 
-    // Divide x offset by aspect ratio to produce an ellipse that matches
-    // the photo proportions: landscape → wide oval, portrait → tall oval
-    vec2 d = vUv - uVignetteCenter;
-    float dist = length(vec2(d.x / uVignetteAspect, d.y)) * uVignetteScale * 2.0;
+    vec2  d    = vUv - uVignetteCenter;
+    // Combined aspect: photo shape × user squeeze factor
+    float dist = length(vec2(d.x / (uVignetteAspect * uEllipseRatio), d.y))
+                   * uVignetteScale * 2.0;
     float vignette = 1.0 - smoothstep(0.35, 1.05, dist);
 
     gl_FragColor = vec4(texColor.rgb * vignette, texColor.a);
@@ -204,45 +234,42 @@ const fragmentShader = /* glsl */`
 // ═══════════════════════════════════════════════════════════════════════════════
 // App state
 // ═══════════════════════════════════════════════════════════════════════════════
-let queue          = [];      // File[] sorted alphabetically — authoritative order
-let photoSettings  = {};      // { filename: { cx, cy, scale } }
+let queue          = [];      // File[] sorted alphabetically
+let photoSettings  = {};      // { filename: { cx, cy, scale, ellipseRatio } }
 let appMode        = 'idle';  // 'idle' | 'setup' | 'performance'
 
-let currentPhotoIdx  = 0;     // index into queue[] of the displayed photo
-let setupPending     = [];    // queue indices not yet locked, in display order
-let editFromPerfIdx  = -1;    // when >= 0, re-editing this index; return to perf on Lock
+let currentPhotoIdx  = 0;
+let setupPending     = [];
+let editFromPerfIdx  = -1;
 
 let photoMesh        = null;
 let vignetteCenter   = { x: 0.5, y: 0.5 };
 let vignetteScale    = 1.0;
+let ellipseRatio     = 1.0;   // user-adjustable width:height multiplier
 
 let perfTimer        = null;
-const PERF_INTERVAL  = 45000; // ms between auto-advances in performance mode
+const PERF_INTERVAL  = 45000;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Photo display helpers
 // ═══════════════════════════════════════════════════════════════════════════════
-
-// World-space height visible at z=0
 function visibleWorldHeight() {
   const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
   return 2 * Math.tan(halfFov) * camera.position.z;
 }
 
-// Scale the plane to fill 60% of visible screen height, aspect preserved
 function resizePhoto() {
   if (!photoMesh) return;
   const { imgW, imgH } = photoMesh.userData;
   const h = visibleWorldHeight() * 0.6;
-  const w = h * (imgW / imgH);
-  photoMesh.scale.set(w, h, 1);
+  photoMesh.scale.set(h * (imgW / imgH), h, 1);
 }
 
-// Screen-pixel rectangle occupied by the photo (for UV ↔ pixel conversion)
+// Pixel rectangle of the displayed photo (mirrors resizePhoto math)
 function photoPixelBounds() {
   if (!photoMesh) return null;
   const { imgW, imgH } = photoMesh.userData;
-  const pixH = window.innerHeight * 0.6; // mirrors visibleWorldHeight() * 0.6
+  const pixH = window.innerHeight * 0.6;
   const pixW = pixH * (imgW / imgH);
   return {
     x: (window.innerWidth  - pixW) / 2,
@@ -251,7 +278,31 @@ function photoPixelBounds() {
   };
 }
 
-// Load a File into a ShaderMaterial PlaneGeometry, returns Promise
+// Geometry of the vignette ellipse at the dist=0.7 iso-contour (mid-fade)
+// Semi-axes in UV:  rx_uv = aspect * ellipseRatio * 0.35 / scale
+//                  ry_uv = 0.35 / scale
+// The right-edge handle sits at (cx + rx_uv, cy) in UV space.
+function ellipseGeometry() {
+  if (!photoMesh) return null;
+  const { imgW, imgH } = photoMesh.userData;
+  const b = photoPixelBounds();
+  if (!b) return null;
+  const aspect = imgW / imgH;
+  const k      = 0.35 / vignetteScale;          // common radius factor
+  const rx_uv  = aspect * ellipseRatio * k;
+  const ry_uv  = k;
+  const cx_px  = b.x + vignetteCenter.x * b.w;
+  const cy_px  = b.y + vignetteCenter.y * b.h;
+  return {
+    cx_px, cy_px,
+    rx_px: rx_uv * b.w,
+    ry_px: ry_uv * b.h,
+    ex_px: b.x + (vignetteCenter.x + rx_uv) * b.w,  // right-edge handle
+    ey_px: cy_px,                                      // always at center y
+  };
+}
+
+// Load a File → Three.js ShaderMaterial PlaneGeometry
 function loadPhotoToMesh(file) {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -268,6 +319,7 @@ function loadPhotoToMesh(file) {
             uVignetteCenter: { value: new THREE.Vector2(vignetteCenter.x, vignetteCenter.y) },
             uVignetteAspect: { value: aspect },
             uVignetteScale:  { value: vignetteScale },
+            uEllipseRatio:   { value: ellipseRatio },
           },
           vertexShader,
           fragmentShader,
@@ -298,37 +350,132 @@ function updateShaderUniforms() {
   if (!photoMesh) return;
   const u = photoMesh.material.uniforms;
   u.uVignetteCenter.value.set(vignetteCenter.x, vignetteCenter.y);
-  u.uVignetteScale.value = vignetteScale;
+  u.uVignetteScale.value  = vignetteScale;
+  u.uEllipseRatio.value   = ellipseRatio;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Vignette handle — draggable circle positioned over the photo
+// Overlay canvas — faint ellipse outline during adjustment
 // ═══════════════════════════════════════════════════════════════════════════════
-const handleEl = document.getElementById('v-handle');
-let isDragging = false;
+const overlayCanvas = document.getElementById('overlay-canvas');
+const overlayCtx    = overlayCanvas.getContext('2d');
 
-function updateHandle() {
-  if (!photoMesh) return;
+function resizeOverlayCanvas() {
+  overlayCanvas.width  = window.innerWidth;
+  overlayCanvas.height = window.innerHeight;
+}
+resizeOverlayCanvas();
+
+function drawEllipseOutline() {
+  overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+  const eg = ellipseGeometry();
+  if (!eg) return;
+  overlayCtx.beginPath();
+  overlayCtx.ellipse(
+    eg.cx_px, eg.cy_px,
+    Math.max(1, eg.rx_px), Math.max(1, eg.ry_px),
+    0, 0, Math.PI * 2
+  );
+  overlayCtx.strokeStyle = 'rgba(255, 255, 255, 0.25)';
+  overlayCtx.lineWidth   = 1.5;
+  overlayCtx.stroke();
+}
+
+function clearEllipseOutline() {
+  overlayCtx.clearRect(0, 0, overlayCanvas.width, overlayCanvas.height);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Handle positioning
+// ═══════════════════════════════════════════════════════════════════════════════
+const handleEl     = document.getElementById('v-handle');
+const edgeHandleEl = document.getElementById('v-edge-handle');
+
+function updateCenterHandle() {
   const b = photoPixelBounds();
   if (!b) return;
   handleEl.style.left = (b.x + vignetteCenter.x * b.w) + 'px';
   handleEl.style.top  = (b.y + vignetteCenter.y * b.h) + 'px';
 }
 
+function updateEdgeHandle() {
+  const eg = ellipseGeometry();
+  if (!eg) return;
+  edgeHandleEl.style.left = eg.ex_px + 'px';
+  edgeHandleEl.style.top  = eg.ey_px + 'px';
+}
+
+// Call after any vignette state change during adjustment mode
+function updateAllHandles() {
+  updateCenterHandle();
+  updateEdgeHandle();
+  // Only redraw outline when adjust UI is visible
+  if (!handleEl.classList.contains('hidden')) {
+    drawEllipseOutline();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Center handle drag — moves vignette center
+// ═══════════════════════════════════════════════════════════════════════════════
+let isDragging = false;
+
 handleEl.addEventListener('mousedown', (e) => {
   e.preventDefault();
   isDragging = true;
 });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Edge handle drag — x axis → scale,  y axis → ellipseRatio
+//   Drag right  → ellipse grows (scale decreases)
+//   Drag left   → ellipse shrinks (scale increases)
+//   Drag down   → wider / flatter (ellipseRatio increases)
+//   Drag up     → taller / narrower (ellipseRatio decreases)
+// ═══════════════════════════════════════════════════════════════════════════════
+let isDraggingEdge = false;
+let edgeDragStart  = null;  // { mouseY, startRatio }
+
+edgeHandleEl.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  isDraggingEdge = true;
+  edgeDragStart  = { mouseY: e.clientY, startRatio: ellipseRatio };
+});
+
+// Shared mousemove for both handle drags
 window.addEventListener('mousemove', (e) => {
-  if (!isDragging || !photoMesh) return;
+  if (!photoMesh) return;
   const b = photoPixelBounds();
   if (!b) return;
-  vignetteCenter.x = Math.max(0, Math.min(1, (e.clientX - b.x) / b.w));
-  vignetteCenter.y = Math.max(0, Math.min(1, (e.clientY - b.y) / b.h));
-  updateHandle();
-  updateShaderUniforms();
+  const { imgW, imgH } = photoMesh.userData;
+  const aspect = imgW / imgH;
+
+  if (isDragging) {
+    vignetteCenter.x = Math.max(0, Math.min(1, (e.clientX - b.x) / b.w));
+    vignetteCenter.y = Math.max(0, Math.min(1, (e.clientY - b.y) / b.h));
+    updateAllHandles();
+    updateShaderUniforms();
+  }
+
+  if (isDraggingEdge && edgeDragStart) {
+    // 1. EllipseRatio from vertical delta (compute first so scale uses updated ratio)
+    const dy_norm = (e.clientY - edgeDragStart.mouseY) / b.h;
+    ellipseRatio  = Math.max(0.1, Math.min(5.0, edgeDragStart.startRatio + dy_norm * 3.0));
+
+    // 2. Scale from horizontal mouse position — handle tracks mouse x
+    const handleUvX = (e.clientX - b.x) / b.w;
+    const rx_uv     = Math.max(0.01, handleUvX - vignetteCenter.x);
+    vignetteScale   = Math.max(0.2, Math.min(8.0, aspect * ellipseRatio * 0.35 / rx_uv));
+
+    updateAllHandles();
+    updateShaderUniforms();
+  }
 });
-window.addEventListener('mouseup', () => { isDragging = false; });
+
+window.addEventListener('mouseup', () => {
+  isDragging     = false;
+  isDraggingEdge = false;
+  edgeDragStart  = null;
+});
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Settings — persisted via HTTP server on port 8080
@@ -360,12 +507,12 @@ async function saveSettings() {
   }
 }
 
-// Initialize vignette state from saved settings (or defaults)
 function initVignetteForPhoto(filename) {
   const s = photoSettings[filename];
-  vignetteCenter.x = s?.cx    ?? 0.5;
-  vignetteCenter.y = s?.cy    ?? 0.5;
-  vignetteScale    = s?.scale ?? 1.0;
+  vignetteCenter.x = s?.cx          ?? 0.5;
+  vignetteCenter.y = s?.cy          ?? 0.5;
+  vignetteScale    = s?.scale       ?? 1.0;
+  ellipseRatio     = s?.ellipseRatio ?? 1.0;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -410,7 +557,6 @@ counterEl.addEventListener('click', () => {
   }
 });
 
-// Close popover when clicking anywhere else
 document.addEventListener('click', (e) => {
   if (!counterEl.contains(e.target) && !popoverEl.contains(e.target)) {
     popoverEl.classList.add('hidden');
@@ -424,21 +570,25 @@ const setupControlsEl = document.getElementById('setup-controls');
 
 function showAdjustUI() {
   handleEl.classList.remove('hidden');
+  edgeHandleEl.classList.remove('hidden');
   setupControlsEl.classList.remove('hidden');
-  updateHandle();
+  updateAllHandles();
 }
+
 function hideAdjustUI() {
   handleEl.classList.add('hidden');
+  edgeHandleEl.classList.add('hidden');
   setupControlsEl.classList.add('hidden');
+  clearEllipseOutline();
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Setup mode — walk through setupPending[], lock or skip each photo
+// Setup mode
 // ═══════════════════════════════════════════════════════════════════════════════
 async function startSetup(files) {
-  queue        = files;
-  setupPending = queue.map((_, i) => i); // [0, 1, … n-1]
-  appMode      = 'setup';
+  queue           = files;
+  setupPending    = queue.map((_, i) => i);
+  appMode         = 'setup';
   editFromPerfIdx = -1;
   document.getElementById('drop-zone').classList.add('hidden');
   await showNextSetup();
@@ -446,8 +596,7 @@ async function startSetup(files) {
 
 async function showNextSetup() {
   if (!setupPending.length) { startPerformance(); return; }
-
-  const idx = setupPending[0];
+  const idx  = setupPending[0];
   currentPhotoIdx = idx;
   const file = queue[idx];
   initVignetteForPhoto(file.name);
@@ -461,17 +610,21 @@ async function showNextSetup() {
 document.getElementById('btn-lock').addEventListener('click', async () => {
   if (!photoMesh) return;
   const filename = queue[currentPhotoIdx].name;
-  photoSettings[filename] = { cx: vignetteCenter.x, cy: vignetteCenter.y, scale: vignetteScale };
+  // Save all four vignette parameters
+  photoSettings[filename] = {
+    cx:          vignetteCenter.x,
+    cy:          vignetteCenter.y,
+    scale:       vignetteScale,
+    ellipseRatio: ellipseRatio,
+  };
   await saveSettings();
 
   if (editFromPerfIdx >= 0) {
-    // Re-edit path: return to performance at the same photo
     const returnIdx = currentPhotoIdx;
     editFromPerfIdx = -1;
     hideAdjustUI();
     startPerformance(returnIdx);
   } else {
-    // Normal setup path: advance to next
     setupPending.shift();
     await showNextSetup();
   }
@@ -479,13 +632,12 @@ document.getElementById('btn-lock').addEventListener('click', async () => {
 
 document.getElementById('btn-skip').addEventListener('click', async () => {
   if (!setupPending.length) return;
-  const skipped = setupPending.shift();
-  setupPending.push(skipped); // move to end of setup queue
+  setupPending.push(setupPending.shift());
   await showNextSetup();
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Performance mode — 45s auto-advance, counter + popover active
+// Performance mode
 // ═══════════════════════════════════════════════════════════════════════════════
 async function showPerfPhoto(idx) {
   currentPhotoIdx = idx;
@@ -513,10 +665,9 @@ async function startPerformance(startIdx = 0) {
   console.log('[chooon-viz] Performance mode — cycling every', PERF_INTERVAL / 1000, 's');
 }
 
-// Enter per-photo re-edit from the popover; pauses the cycle until re-locked
 async function enterAdjustFromPerf(idx) {
   if (perfTimer) { clearTimeout(perfTimer); perfTimer = null; }
-  appMode         = 'setup'; // reuse setup UI path
+  appMode         = 'setup';
   editFromPerfIdx = idx;
   currentPhotoIdx = idx;
   const file = queue[idx];
@@ -549,7 +700,7 @@ async function collectFiles(dataTransfer) {
           reader.readEntries(async (entries) => {
             if (!entries.length) { resolve(); return; }
             for (const e of entries) await readEntry(e);
-            readBatch(); // readEntries may return partial batches
+            readBatch();
           });
         }
         readBatch();
@@ -564,7 +715,6 @@ async function collectFiles(dataTransfer) {
       if (entry) await readEntry(entry);
     }
   } else {
-    // Fallback: use files directly (no directory support)
     for (const f of dataTransfer.files) {
       if (f.type.startsWith('image/')) files.push(f);
     }
@@ -598,7 +748,7 @@ canvas.addEventListener('drop', async (e) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// WebSocket — audio data (unchanged from session 2)
+// WebSocket — audio data
 // ═══════════════════════════════════════════════════════════════════════════════
 const WS_URL    = 'ws://localhost:8765';
 const RECONNECT = 2000;
