@@ -7,67 +7,103 @@
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body { background: #000; overflow: hidden; }
     canvas { display: block; }
+    .hidden { opacity: 0 !important; pointer-events: none !important; }
 
+    /* ── Status chip ── */
     #status {
-      position: fixed;
-      top: 12px;
-      left: 12px;
-      font-family: monospace;
-      font-size: 11px;
-      padding: 4px 8px;
-      border-radius: 4px;
+      position: fixed; top: 12px; left: 12px;
+      font-family: monospace; font-size: 11px;
+      padding: 4px 8px; border-radius: 4px;
       pointer-events: none;
       transition: background 0.3s, color 0.3s;
     }
-    #status.connected {
-      background: rgba(0, 255, 80, 0.15);
-      color: #00ff50;
-      border: 1px solid rgba(0, 255, 80, 0.4);
-    }
-    #status.disconnected {
-      background: rgba(255, 40, 40, 0.15);
-      color: #ff4040;
-      border: 1px solid rgba(255, 40, 40, 0.4);
-    }
+    #status.connected    { background: rgba(0,255,80,0.15);  color: #00ff50; border: 1px solid rgba(0,255,80,0.4); }
+    #status.disconnected { background: rgba(255,40,40,0.15); color: #ff4040; border: 1px solid rgba(255,40,40,0.4); }
 
-    /* ── Drop zone overlay ── */
+    /* ── Drop zone ── */
     #drop-zone {
-      position: fixed;
-      inset: 0;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      gap: 16px;
-      pointer-events: none; /* canvas underneath handles drag events */
+      position: fixed; inset: 0;
+      display: flex; flex-direction: column;
+      align-items: center; justify-content: center; gap: 16px;
+      pointer-events: none;
       transition: opacity 0.4s;
     }
-    #drop-zone.hidden { opacity: 0; pointer-events: none; }
-
     #drop-ring {
-      width: 160px;
-      height: 160px;
-      border-radius: 50%;
-      border: 2px dashed rgba(255, 255, 255, 0.2);
-      display: flex;
-      align-items: center;
-      justify-content: center;
+      width: 160px; height: 160px; border-radius: 50%;
+      border: 2px dashed rgba(255,255,255,0.2);
+      display: flex; align-items: center; justify-content: center;
       transition: border-color 0.2s;
     }
-    #drop-ring svg { opacity: 0.25; transition: opacity 0.2s; }
+    #drop-ring svg    { opacity: 0.25; transition: opacity 0.2s; }
+    #drop-label       { font-family: monospace; font-size: 13px; letter-spacing: 0.06em; color: rgba(255,255,255,0.25); transition: color 0.2s; }
+    body.drag-over #drop-ring     { border-color: rgba(255,255,255,0.75); }
+    body.drag-over #drop-ring svg { opacity: 0.85; }
+    body.drag-over #drop-label    { color: rgba(255,255,255,0.75); }
 
-    #drop-label {
-      font-family: monospace;
-      font-size: 13px;
-      letter-spacing: 0.06em;
-      color: rgba(255, 255, 255, 0.25);
-      transition: color 0.2s;
+    /* ── Counter ── */
+    #counter {
+      position: fixed; bottom: 14px; right: 16px;
+      font-family: monospace; font-size: 11px;
+      color: rgba(255,255,255,0.45);
+      letter-spacing: 0.04em;
+      user-select: none;
+      transition: opacity 0.3s, color 0.2s;
     }
+    #counter.clickable         { cursor: pointer; color: rgba(255,255,255,0.7); }
+    #counter.clickable:hover   { color: #fff; }
 
-    /* Drag-over state (toggled on body) */
-    body.drag-over #drop-ring        { border-color: rgba(255, 255, 255, 0.75); }
-    body.drag-over #drop-ring svg    { opacity: 0.85; }
-    body.drag-over #drop-label       { color: rgba(255, 255, 255, 0.75); }
+    /* ── Vignette handle ── */
+    #v-handle {
+      position: fixed;
+      width: 20px; height: 20px; border-radius: 50%;
+      border: 2px solid rgba(255,255,255,0.9);
+      background: rgba(255,255,255,0.2);
+      transform: translate(-50%, -50%);
+      cursor: grab;
+      transition: opacity 0.25s;
+      box-shadow: 0 0 8px rgba(0,0,0,0.7), 0 0 0 1px rgba(0,0,0,0.3);
+    }
+    #v-handle:active { cursor: grabbing; }
+
+    /* ── Setup controls ── */
+    #setup-controls {
+      position: fixed; bottom: 24px;
+      left: 50%; transform: translateX(-50%);
+      display: flex; gap: 10px;
+      transition: opacity 0.3s;
+    }
+    #setup-controls button {
+      font-family: monospace; font-size: 12px;
+      padding: 6px 20px; border-radius: 4px;
+      border: none; cursor: pointer;
+      letter-spacing: 0.04em;
+    }
+    #btn-lock { background: #2a7a3b; color: #fff; }
+    #btn-lock:hover { background: #35a04d; }
+    #btn-skip { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.65); }
+    #btn-skip:hover { background: rgba(255,255,255,0.18); }
+
+    /* ── Queue popover ── */
+    #queue-popover {
+      position: fixed; bottom: 40px; right: 12px;
+      background: rgba(10,10,10,0.93);
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 6px;
+      min-width: 200px; max-width: 340px;
+      max-height: 300px; overflow-y: auto;
+      padding: 6px 0;
+      transition: opacity 0.2s;
+      z-index: 20;
+    }
+    .pop-item {
+      font-family: monospace; font-size: 11px;
+      color: rgba(255,255,255,0.65);
+      padding: 5px 14px;
+      cursor: pointer;
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .pop-item:hover  { background: rgba(255,255,255,0.07); color: #fff; }
+    .pop-item.active { color: #00ff80; }
   </style>
 </head>
 <body>
@@ -76,7 +112,6 @@
 
 <div id="drop-zone">
   <div id="drop-ring">
-    <!-- upload / photo icon -->
     <svg width="52" height="52" viewBox="0 0 24 24" fill="none"
          stroke="white" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
       <rect x="3" y="3" width="18" height="18" rx="2"/>
@@ -84,87 +119,141 @@
       <polyline points="21 15 16 10 5 21"/>
     </svg>
   </div>
-  <div id="drop-label">Drop a photo to begin</div>
+  <div id="drop-label">Drop photos or a folder to begin</div>
 </div>
+
+<div id="counter"         class="hidden"></div>
+<div id="v-handle"        class="hidden"></div>
+<div id="setup-controls"  class="hidden">
+  <button id="btn-skip">Skip</button>
+  <button id="btn-lock">Lock Vignette</button>
+</div>
+<div id="queue-popover" class="hidden"></div>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
-  // ── Three.js bootstrap ──────────────────────────────────────────────────────
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
-  renderer.setPixelRatio(window.devicePixelRatio);
+// ═══════════════════════════════════════════════════════════════════════════════
+// Three.js bootstrap
+// ═══════════════════════════════════════════════════════════════════════════════
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.setClearColor(0x000000, 1);
+document.body.appendChild(renderer.domElement);
+
+const scene  = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+camera.position.z = 5;
+
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.setClearColor(0x000000, 1);
-  document.body.appendChild(renderer.domElement);
+  resizePhoto();
+  updateHandle();
+});
 
-  const scene  = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-  camera.position.z = 5;
+function animate() {
+  requestAnimationFrame(animate);
+  renderer.render(scene, camera);
+}
+animate();
 
-  window.addEventListener('resize', () => {
-    camera.aspect = window.innerWidth / window.innerHeight;
-    camera.updateProjectionMatrix();
-    renderer.setSize(window.innerWidth, window.innerHeight);
-    resizePhoto(); // re-fit if a photo is loaded
-  });
+// ═══════════════════════════════════════════════════════════════════════════════
+// Status chip
+// ═══════════════════════════════════════════════════════════════════════════════
+const statusEl = document.getElementById('status');
+function setStatus(connected) {
+  statusEl.textContent = connected ? 'Connected' : 'Disconnected';
+  statusEl.className   = connected ? 'connected'  : 'disconnected';
+}
 
-  function animate() {
-    requestAnimationFrame(animate);
-    renderer.render(scene, camera);
+// ═══════════════════════════════════════════════════════════════════════════════
+// Elliptical vignette shader
+// uVignetteAspect = imgW/imgH — landscape gets wide oval, portrait gets tall oval
+// ═══════════════════════════════════════════════════════════════════════════════
+const vertexShader = /* glsl */`
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
   }
-  animate();
+`;
 
-  // ── Status indicator ────────────────────────────────────────────────────────
-  const statusEl = document.getElementById('status');
-  function setStatus(connected) {
-    statusEl.textContent = connected ? 'Connected' : 'Disconnected';
-    statusEl.className   = connected ? 'connected'  : 'disconnected';
+const fragmentShader = /* glsl */`
+  uniform sampler2D uTexture;
+  uniform vec2  uVignetteCenter; // 0..1 UV
+  uniform float uVignetteAspect; // imgW / imgH
+  uniform float uVignetteScale;  // overall size multiplier
+
+  varying vec2 vUv;
+
+  void main() {
+    vec4 texColor = texture2D(uTexture, vUv);
+
+    // Divide x offset by aspect ratio to produce an ellipse that matches
+    // the photo proportions: landscape → wide oval, portrait → tall oval
+    vec2 d = vUv - uVignetteCenter;
+    float dist = length(vec2(d.x / uVignetteAspect, d.y)) * uVignetteScale * 2.0;
+    float vignette = 1.0 - smoothstep(0.35, 1.05, dist);
+
+    gl_FragColor = vec4(texColor.rgb * vignette, texColor.a);
   }
+`;
 
-  // ── Vignette shader ─────────────────────────────────────────────────────────
-  const vertexShader = /* glsl */`
-    varying vec2 vUv;
-    void main() {
-      vUv = uv;
-      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-    }
-  `;
+// ═══════════════════════════════════════════════════════════════════════════════
+// App state
+// ═══════════════════════════════════════════════════════════════════════════════
+let queue          = [];      // File[] sorted alphabetically — authoritative order
+let photoSettings  = {};      // { filename: { cx, cy, scale } }
+let appMode        = 'idle';  // 'idle' | 'setup' | 'performance'
 
-  // Radial vignette: full brightness at center, pure black at edges.
-  // dist goes 0→1 across the inscribed circle; smoothstep pulls it down
-  // starting at 0.35 so the fade feels generous but complete at 1.0.
-  const fragmentShader = /* glsl */`
-    uniform sampler2D uTexture;
-    varying vec2 vUv;
+let currentPhotoIdx  = 0;     // index into queue[] of the displayed photo
+let setupPending     = [];    // queue indices not yet locked, in display order
+let editFromPerfIdx  = -1;    // when >= 0, re-editing this index; return to perf on Lock
 
-    void main() {
-      vec4 texColor = texture2D(uTexture, vUv);
+let photoMesh        = null;
+let vignetteCenter   = { x: 0.5, y: 0.5 };
+let vignetteScale    = 1.0;
 
-      float dist     = length(vUv - 0.5) * 2.0;          // 0 center → ~1.41 corners
-      float vignette = 1.0 - smoothstep(0.35, 1.05, dist); // fade band
+let perfTimer        = null;
+const PERF_INTERVAL  = 45000; // ms between auto-advances in performance mode
 
-      gl_FragColor = vec4(texColor.rgb * vignette, texColor.a);
-    }
-  `;
+// ═══════════════════════════════════════════════════════════════════════════════
+// Photo display helpers
+// ═══════════════════════════════════════════════════════════════════════════════
 
-  // ── Photo plane ─────────────────────────────────────────────────────────────
-  let photoMesh = null;
+// World-space height visible at z=0
+function visibleWorldHeight() {
+  const halfFov = THREE.MathUtils.degToRad(camera.fov / 2);
+  return 2 * Math.tan(halfFov) * camera.position.z;
+}
 
-  // World-space height visible at z=0 given the current camera
-  function visibleWorldHeight() {
-    const halfFovRad = THREE.MathUtils.degToRad(camera.fov / 2);
-    return 2 * Math.tan(halfFovRad) * camera.position.z;
-  }
+// Scale the plane to fill 60% of visible screen height, aspect preserved
+function resizePhoto() {
+  if (!photoMesh) return;
+  const { imgW, imgH } = photoMesh.userData;
+  const h = visibleWorldHeight() * 0.6;
+  const w = h * (imgW / imgH);
+  photoMesh.scale.set(w, h, 1);
+}
 
-  // Scale the plane so the photo fills 60% of screen height, aspect preserved
-  function resizePhoto() {
-    if (!photoMesh) return;
-    const { imgW, imgH } = photoMesh.userData;
-    const h = visibleWorldHeight() * 0.6;
-    const w = h * (imgW / imgH);
-    photoMesh.scale.set(w, h, 1);
-  }
+// Screen-pixel rectangle occupied by the photo (for UV ↔ pixel conversion)
+function photoPixelBounds() {
+  if (!photoMesh) return null;
+  const { imgW, imgH } = photoMesh.userData;
+  const pixH = window.innerHeight * 0.6; // mirrors visibleWorldHeight() * 0.6
+  const pixW = pixH * (imgW / imgH);
+  return {
+    x: (window.innerWidth  - pixW) / 2,
+    y: (window.innerHeight - pixH) / 2,
+    w: pixW, h: pixH,
+  };
+}
 
-  function loadPhoto(file) {
+// Load a File into a ShaderMaterial PlaneGeometry, returns Promise
+function loadPhotoToMesh(file) {
+  return new Promise((resolve) => {
     const reader = new FileReader();
     reader.onload = (e) => {
       const img = new Image();
@@ -172,14 +261,19 @@
         const texture       = new THREE.Texture(img);
         texture.needsUpdate = true;
 
+        const aspect = img.naturalWidth / img.naturalHeight;
         const mat = new THREE.ShaderMaterial({
-          uniforms:       { uTexture: { value: texture } },
+          uniforms: {
+            uTexture:        { value: texture },
+            uVignetteCenter: { value: new THREE.Vector2(vignetteCenter.x, vignetteCenter.y) },
+            uVignetteAspect: { value: aspect },
+            uVignetteScale:  { value: vignetteScale },
+          },
           vertexShader,
           fragmentShader,
         });
-        const geo = new THREE.PlaneGeometry(1, 1); // actual size applied via scale
+        const geo = new THREE.PlaneGeometry(1, 1);
 
-        // Clean up previous photo
         if (photoMesh) {
           photoMesh.material.uniforms.uTexture.value.dispose();
           photoMesh.material.dispose();
@@ -188,79 +282,366 @@
         }
 
         photoMesh = new THREE.Mesh(geo, mat);
-        photoMesh.userData = { imgW: img.naturalWidth, imgH: img.naturalHeight };
+        photoMesh.userData = { imgW: img.naturalWidth, imgH: img.naturalHeight, filename: file.name };
         scene.add(photoMesh);
         resizePhoto();
-
-        document.getElementById('drop-zone').classList.add('hidden');
-        console.log(`[chooon-viz] Photo loaded: ${img.naturalWidth}×${img.naturalHeight} — ${file.name}`);
+        console.log(`[chooon-viz] Loaded: ${file.name} (${img.naturalWidth}×${img.naturalHeight})`);
+        resolve();
       };
       img.src = e.target.result;
     };
     reader.readAsDataURL(file);
+  });
+}
+
+function updateShaderUniforms() {
+  if (!photoMesh) return;
+  const u = photoMesh.material.uniforms;
+  u.uVignetteCenter.value.set(vignetteCenter.x, vignetteCenter.y);
+  u.uVignetteScale.value = vignetteScale;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Vignette handle — draggable circle positioned over the photo
+// ═══════════════════════════════════════════════════════════════════════════════
+const handleEl = document.getElementById('v-handle');
+let isDragging = false;
+
+function updateHandle() {
+  if (!photoMesh) return;
+  const b = photoPixelBounds();
+  if (!b) return;
+  handleEl.style.left = (b.x + vignetteCenter.x * b.w) + 'px';
+  handleEl.style.top  = (b.y + vignetteCenter.y * b.h) + 'px';
+}
+
+handleEl.addEventListener('mousedown', (e) => {
+  e.preventDefault();
+  isDragging = true;
+});
+window.addEventListener('mousemove', (e) => {
+  if (!isDragging || !photoMesh) return;
+  const b = photoPixelBounds();
+  if (!b) return;
+  vignetteCenter.x = Math.max(0, Math.min(1, (e.clientX - b.x) / b.w));
+  vignetteCenter.y = Math.max(0, Math.min(1, (e.clientY - b.y) / b.h));
+  updateHandle();
+  updateShaderUniforms();
+});
+window.addEventListener('mouseup', () => { isDragging = false; });
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Settings — persisted via HTTP server on port 8080
+// ═══════════════════════════════════════════════════════════════════════════════
+const HTTP_BASE = 'http://localhost:8080';
+
+async function loadSettings() {
+  try {
+    const res = await fetch(`${HTTP_BASE}/photo_settings.json`);
+    if (res.ok) {
+      photoSettings = await res.json();
+      console.log('[chooon-viz] Settings loaded:', Object.keys(photoSettings).length, 'photo(s)');
+    }
+  } catch (_) {
+    console.log('[chooon-viz] No existing settings (server not running or file absent)');
+  }
+}
+
+async function saveSettings() {
+  try {
+    const res = await fetch(`${HTTP_BASE}/save_settings`, {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(photoSettings),
+    });
+    if (res.ok) console.log('[chooon-viz] Settings saved');
+  } catch (err) {
+    console.warn('[chooon-viz] Failed to save settings:', err);
+  }
+}
+
+// Initialize vignette state from saved settings (or defaults)
+function initVignetteForPhoto(filename) {
+  const s = photoSettings[filename];
+  vignetteCenter.x = s?.cx    ?? 0.5;
+  vignetteCenter.y = s?.cy    ?? 0.5;
+  vignetteScale    = s?.scale ?? 1.0;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Counter + queue popover
+// ═══════════════════════════════════════════════════════════════════════════════
+const counterEl = document.getElementById('counter');
+const popoverEl = document.getElementById('queue-popover');
+
+function updateCounter() {
+  if (!queue.length) { counterEl.classList.add('hidden'); return; }
+  counterEl.classList.remove('hidden');
+  counterEl.textContent = `${currentPhotoIdx + 1} of ${queue.length}`;
+  if (appMode === 'performance') {
+    counterEl.classList.add('clickable');
+  } else {
+    counterEl.classList.remove('clickable');
+    popoverEl.classList.add('hidden');
+  }
+}
+
+function buildPopover() {
+  popoverEl.innerHTML = '';
+  queue.forEach((file, i) => {
+    const item = document.createElement('div');
+    item.className   = 'pop-item' + (i === currentPhotoIdx ? ' active' : '');
+    item.textContent = file.name;
+    item.addEventListener('click', () => {
+      popoverEl.classList.add('hidden');
+      enterAdjustFromPerf(i);
+    });
+    popoverEl.appendChild(item);
+  });
+}
+
+counterEl.addEventListener('click', () => {
+  if (appMode !== 'performance') return;
+  if (popoverEl.classList.contains('hidden')) {
+    buildPopover();
+    popoverEl.classList.remove('hidden');
+  } else {
+    popoverEl.classList.add('hidden');
+  }
+});
+
+// Close popover when clicking anywhere else
+document.addEventListener('click', (e) => {
+  if (!counterEl.contains(e.target) && !popoverEl.contains(e.target)) {
+    popoverEl.classList.add('hidden');
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Adjust UI helpers
+// ═══════════════════════════════════════════════════════════════════════════════
+const setupControlsEl = document.getElementById('setup-controls');
+
+function showAdjustUI() {
+  handleEl.classList.remove('hidden');
+  setupControlsEl.classList.remove('hidden');
+  updateHandle();
+}
+function hideAdjustUI() {
+  handleEl.classList.add('hidden');
+  setupControlsEl.classList.add('hidden');
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Setup mode — walk through setupPending[], lock or skip each photo
+// ═══════════════════════════════════════════════════════════════════════════════
+async function startSetup(files) {
+  queue        = files;
+  setupPending = queue.map((_, i) => i); // [0, 1, … n-1]
+  appMode      = 'setup';
+  editFromPerfIdx = -1;
+  document.getElementById('drop-zone').classList.add('hidden');
+  await showNextSetup();
+}
+
+async function showNextSetup() {
+  if (!setupPending.length) { startPerformance(); return; }
+
+  const idx = setupPending[0];
+  currentPhotoIdx = idx;
+  const file = queue[idx];
+  initVignetteForPhoto(file.name);
+  await loadPhotoToMesh(file);
+  updateShaderUniforms();
+  showAdjustUI();
+  updateCounter();
+  console.log(`[chooon-viz] Setup: "${file.name}" — ${setupPending.length} remaining`);
+}
+
+document.getElementById('btn-lock').addEventListener('click', async () => {
+  if (!photoMesh) return;
+  const filename = queue[currentPhotoIdx].name;
+  photoSettings[filename] = { cx: vignetteCenter.x, cy: vignetteCenter.y, scale: vignetteScale };
+  await saveSettings();
+
+  if (editFromPerfIdx >= 0) {
+    // Re-edit path: return to performance at the same photo
+    const returnIdx = currentPhotoIdx;
+    editFromPerfIdx = -1;
+    hideAdjustUI();
+    startPerformance(returnIdx);
+  } else {
+    // Normal setup path: advance to next
+    setupPending.shift();
+    await showNextSetup();
+  }
+});
+
+document.getElementById('btn-skip').addEventListener('click', async () => {
+  if (!setupPending.length) return;
+  const skipped = setupPending.shift();
+  setupPending.push(skipped); // move to end of setup queue
+  await showNextSetup();
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Performance mode — 45s auto-advance, counter + popover active
+// ═══════════════════════════════════════════════════════════════════════════════
+async function showPerfPhoto(idx) {
+  currentPhotoIdx = idx;
+  const file = queue[idx];
+  initVignetteForPhoto(file.name);
+  await loadPhotoToMesh(file);
+  updateShaderUniforms();
+  updateCounter();
+}
+
+function schedulePerfAdvance() {
+  if (perfTimer) clearTimeout(perfTimer);
+  perfTimer = setTimeout(async () => {
+    if (appMode !== 'performance') return;
+    await showPerfPhoto((currentPhotoIdx + 1) % queue.length);
+    schedulePerfAdvance();
+  }, PERF_INTERVAL);
+}
+
+async function startPerformance(startIdx = 0) {
+  appMode = 'performance';
+  hideAdjustUI();
+  await showPerfPhoto(startIdx);
+  schedulePerfAdvance();
+  console.log('[chooon-viz] Performance mode — cycling every', PERF_INTERVAL / 1000, 's');
+}
+
+// Enter per-photo re-edit from the popover; pauses the cycle until re-locked
+async function enterAdjustFromPerf(idx) {
+  if (perfTimer) { clearTimeout(perfTimer); perfTimer = null; }
+  appMode         = 'setup'; // reuse setup UI path
+  editFromPerfIdx = idx;
+  currentPhotoIdx = idx;
+  const file = queue[idx];
+  initVignetteForPhoto(file.name);
+  await loadPhotoToMesh(file);
+  updateShaderUniforms();
+  showAdjustUI();
+  updateCounter();
+  console.log(`[chooon-viz] Re-editing: "${file.name}"`);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// File collection — handles individual files and folder drops
+// ═══════════════════════════════════════════════════════════════════════════════
+async function collectFiles(dataTransfer) {
+  const files = [];
+
+  async function readEntry(entry) {
+    if (entry.isFile) {
+      await new Promise(resolve => {
+        entry.file(f => {
+          if (f.type.startsWith('image/')) files.push(f);
+          resolve();
+        });
+      });
+    } else if (entry.isDirectory) {
+      const reader = entry.createReader();
+      await new Promise(resolve => {
+        function readBatch() {
+          reader.readEntries(async (entries) => {
+            if (!entries.length) { resolve(); return; }
+            for (const e of entries) await readEntry(e);
+            readBatch(); // readEntries may return partial batches
+          });
+        }
+        readBatch();
+      });
+    }
   }
 
-  // ── Drag-and-drop ───────────────────────────────────────────────────────────
-  const canvas = renderer.domElement;
+  const items = [...(dataTransfer.items || [])];
+  if (items.length && typeof items[0].webkitGetAsEntry === 'function') {
+    for (const item of items) {
+      const entry = item.webkitGetAsEntry();
+      if (entry) await readEntry(entry);
+    }
+  } else {
+    // Fallback: use files directly (no directory support)
+    for (const f of dataTransfer.files) {
+      if (f.type.startsWith('image/')) files.push(f);
+    }
+  }
 
-  // Prevent browser from navigating to dropped file
-  window.addEventListener('dragover',  (e) => e.preventDefault());
-  window.addEventListener('drop',      (e) => e.preventDefault());
+  return files.sort((a, b) => a.name.localeCompare(b.name));
+}
 
-  canvas.addEventListener('dragenter', ()  => document.body.classList.add('drag-over'));
-  canvas.addEventListener('dragover',  (e) => e.preventDefault());
-  canvas.addEventListener('dragleave', ()  => document.body.classList.remove('drag-over'));
+// ═══════════════════════════════════════════════════════════════════════════════
+// Drag-and-drop
+// ═══════════════════════════════════════════════════════════════════════════════
+const canvas = renderer.domElement;
 
-  canvas.addEventListener('drop', (e) => {
-    e.preventDefault();
-    document.body.classList.remove('drag-over');
-    const file = e.dataTransfer.files[0];
-    if (file && file.type.startsWith('image/')) {
-      loadPhoto(file);
-    } else {
-      console.warn('[chooon-viz] Dropped item is not an image:', file?.type ?? 'unknown');
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop',     (e) => e.preventDefault());
+
+canvas.addEventListener('dragenter', ()  => document.body.classList.add('drag-over'));
+canvas.addEventListener('dragover',  (e) => e.preventDefault());
+canvas.addEventListener('dragleave', ()  => document.body.classList.remove('drag-over'));
+
+canvas.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  document.body.classList.remove('drag-over');
+  const files = await collectFiles(e.dataTransfer);
+  if (!files.length) {
+    console.warn('[chooon-viz] No image files found in drop');
+    return;
+  }
+  console.log(`[chooon-viz] Collected ${files.length} image(s)`);
+  await startSetup(files);
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WebSocket — audio data (unchanged from session 2)
+// ═══════════════════════════════════════════════════════════════════════════════
+const WS_URL    = 'ws://localhost:8765';
+const RECONNECT = 2000;
+
+function connect() {
+  const ws = new WebSocket(WS_URL);
+
+  ws.addEventListener('open', () => {
+    setStatus(true);
+    console.log('[chooon-viz] WebSocket connected to', WS_URL);
+  });
+
+  ws.addEventListener('message', (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      console.log('[audio]', data);
+      // data.beat          — boolean
+      // data.beat_strength — float 0-1
+      // data.volume        — float 0-1
+      // data.band_energy   — float[] (per-band energy)
+      // data.dominant_freq — float Hz
+    } catch (err) {
+      console.warn('[chooon-viz] Failed to parse message:', event.data);
     }
   });
 
-  // ── WebSocket ───────────────────────────────────────────────────────────────
-  const WS_URL    = 'ws://localhost:8765';
-  const RECONNECT = 2000;
+  ws.addEventListener('close', () => {
+    setStatus(false);
+    console.log('[chooon-viz] WebSocket closed. Reconnecting in', RECONNECT, 'ms…');
+    setTimeout(connect, RECONNECT);
+  });
 
-  function connect() {
-    const ws = new WebSocket(WS_URL);
+  ws.addEventListener('error', (err) => {
+    console.error('[chooon-viz] WebSocket error:', err);
+    ws.close();
+  });
+}
 
-    ws.addEventListener('open', () => {
-      setStatus(true);
-      console.log('[chooon-viz] WebSocket connected to', WS_URL);
-    });
-
-    ws.addEventListener('message', (event) => {
-      try {
-        const data = JSON.parse(event.data);
-        console.log('[audio]', data);
-        // data.beat          — boolean
-        // data.beat_strength — float 0-1
-        // data.volume        — float 0-1
-        // data.band_energy   — float[] (per-band energy)
-        // data.dominant_freq — float Hz
-      } catch (err) {
-        console.warn('[chooon-viz] Failed to parse message:', event.data);
-      }
-    });
-
-    ws.addEventListener('close', () => {
-      setStatus(false);
-      console.log('[chooon-viz] WebSocket closed. Reconnecting in', RECONNECT, 'ms…');
-      setTimeout(connect, RECONNECT);
-    });
-
-    ws.addEventListener('error', (err) => {
-      console.error('[chooon-viz] WebSocket error:', err);
-      ws.close();
-    });
-  }
-
-  connect();
+// ═══════════════════════════════════════════════════════════════════════════════
+// Init
+// ═══════════════════════════════════════════════════════════════════════════════
+loadSettings();
+connect();
 </script>
 </body>
 </html>
