@@ -1,0 +1,6 @@
+Session 1 COMPLETE.
+audio_server.py runs on ws://localhost:8765.
+Broadcasts beat, beat_strength, volume, band_energy (6 bands), dominant_freq as JSON at ~60fps.
+Start command: cd chooon-viz → source .venv/bin/activate → python3 audio_server.py
+
+  
