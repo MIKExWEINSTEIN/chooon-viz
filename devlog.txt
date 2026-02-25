@@ -3,4 +3,15 @@ audio_server.py runs on ws://localhost:8765.
 Broadcasts beat, beat_strength, volume, band_energy (6 bands), dominant_freq as JSON at ~60fps.
 Start command: cd chooon-viz → source .venv/bin/activate → python3 audio_server.py
 
-  
+Session 2 COMPLETE.
+visualizer.html loads Three.js r128, connects to ws://localhost:8765,
+logs audio data to console, shows Connected/Disconnected status chip.
+WebGL required SwiftShader flag enabled in chrome://flags.
+
+Launch sequence every session:
+  Terminal 1: cd chooon-viz → source .venv/bin/activate → python3 audio_server.py
+  Terminal 2: cd chooon-viz → python3 -m http.server 8080
+  Chrome: http://localhost:8080/visualizer.html 
+
+Sessions 1 & 2 summary: audio_server.py was built to run an AudioAnalyzer and broadcast beat, volume, band energy, and dominant frequency as JSON frames at ~60 fps over a WebSocket on localhost:8765. visualizer.html was then created as the frontend scaffold — it loads Three.js r128 from CDN, connects to the WebSocket with auto-reconnect, logs all incoming audio data to the browser console, renders a black fullscreen canvas, and shows a color-coded Connected/Disconnected status chip in the top-left corner.
+
