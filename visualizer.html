@@ -180,8 +180,28 @@ window.addEventListener('resize', () => {
   updateAllHandles();
 });
 
-function animate() {
+function animate(ts = 0) {
   requestAnimationFrame(animate);
+
+  // Delta time in seconds, capped to avoid huge jumps after tab blur
+  const dt  = Math.min((ts - prevTimestamp) / 1000.0, 0.1);
+  prevTimestamp = ts;
+  shaderTime   += dt;
+
+  if (photoMesh) {
+    const u = photoMesh.material.uniforms;
+
+    // Feed audio values
+    u.uBass.value         = audioData.bandEnergy[1] ?? 0;
+    u.uBeatFlash.value    = beatFlash;
+    u.uBeatStrength.value = beatStrengthDecay;
+    u.uTime.value         = shaderTime;
+
+    // Exponential-style linear decay toward zero
+    beatFlash         = Math.max(0, beatFlash         - dt / BEAT_FLASH_DECAY);
+    beatStrengthDecay = Math.max(0, beatStrengthDecay - dt / BEAT_STRENGTH_DECAY);
+  }
+
   renderer.render(scene, camera);
 }
 animate();
@@ -196,38 +216,73 @@ function setStatus(connected) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// Elliptical vignette shader
-// uVignetteAspect = imgW/imgH  — makes oval match photo proportions
-// uEllipseRatio   = user ratio — independently squash/stretch the oval
-//   > 1 → wider ellipse, < 1 → taller ellipse
+// Shaders
+// Vertex:   uBass-driven radial ripple + centre bulge displacement (32×32 mesh)
+// Fragment: elliptical vignette · chromatic aberration · film grain · beat flash
 // ═══════════════════════════════════════════════════════════════════════════════
 const vertexShader = /* glsl */`
   varying vec2 vUv;
+  uniform float uBass; // 0-1, drives displacement amplitude
+  uniform float uTime; // seconds, animates ripple propagation
+
   void main() {
     vUv = uv;
-    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    vec3 pos = position;
+
+    // Radial distance from plane centre (0 at centre, ~1.41 at corners)
+    float dist = length(uv - 0.5) * 2.0;
+
+    // Animated sine-wave ripple — amplitude scales with bass
+    float ripple = sin(dist * 10.0 - uTime * 5.0) * uBass * 0.08;
+
+    // Smooth dome bulge: centre pushes forward, falls off toward edges
+    float bulge  = (1.0 - smoothstep(0.0, 1.2, dist)) * uBass * 0.12;
+
+    pos.z += ripple + bulge;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
   }
 `;
 
 const fragmentShader = /* glsl */`
   uniform sampler2D uTexture;
-  uniform vec2  uVignetteCenter; // UV 0..1
-  uniform float uVignetteAspect; // imgW / imgH  (photo shape)
-  uniform float uVignetteScale;  // overall size — larger = smaller ellipse
-  uniform float uEllipseRatio;   // user h:w adjustment (default 1.0)
+  uniform vec2  uVignetteCenter;  // UV 0..1
+  uniform float uVignetteAspect;  // imgW / imgH  (photo shape)
+  uniform float uVignetteScale;   // overall size — larger = smaller ellipse
+  uniform float uEllipseRatio;    // user h:w adjustment (default 1.0)
+  uniform float uBeatStrength;    // 0-1, drives chromatic aberration (with decay)
+  uniform float uBeatFlash;       // 0-1, brief brightness spike on each beat
+  uniform float uTime;            // seconds, drives film-grain animation
 
   varying vec2 vUv;
 
+  // Fast spatial hash for film grain
+  float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+  }
+
   void main() {
-    vec4 texColor = texture2D(uTexture, vUv);
+    // ── Chromatic aberration ─────────────────────────────────────────────────
+    float ab  = uBeatStrength * 0.015;
+    float r   = texture2D(uTexture, vUv - vec2(ab, 0.0)).r;
+    float g   = texture2D(uTexture, vUv).g;
+    float b   = texture2D(uTexture, vUv + vec2(ab, 0.0)).b;
+    vec4 texColor = vec4(r, g, b, texture2D(uTexture, vUv).a);
 
-    vec2  d    = vUv - uVignetteCenter;
-    // Combined aspect: photo shape × user squeeze factor
-    float dist = length(vec2(d.x / (uVignetteAspect * uEllipseRatio), d.y))
-                   * uVignetteScale * 2.0;
-    float vignette = 1.0 - smoothstep(0.35, 1.05, dist);
+    // ── Elliptical vignette ──────────────────────────────────────────────────
+    vec2  d        = vUv - uVignetteCenter;
+    float vDist    = length(vec2(d.x / (uVignetteAspect * uEllipseRatio), d.y))
+                       * uVignetteScale * 2.0;
+    float vignette = 1.0 - smoothstep(0.35, 1.05, vDist);
+    texColor.rgb  *= vignette;
 
-    gl_FragColor = vec4(texColor.rgb * vignette, texColor.a);
+    // ── Film grain (analog texture, follows vignette so edges stay black) ───
+    float grain    = hash(vUv * 800.0 + vec2(uTime * 7.3, uTime * 11.7)) - 0.5;
+    texColor.rgb  += grain * 0.04 * vignette;
+
+    // ── Beat flash ───────────────────────────────────────────────────────────
+    texColor.rgb  *= (1.0 + uBeatFlash);
+
+    gl_FragColor = texColor;
   }
 `;
 
@@ -249,6 +304,22 @@ let ellipseRatio     = 1.0;   // user-adjustable width:height multiplier
 
 let perfTimer        = null;
 const PERF_INTERVAL  = 45000;
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Audio state — updated by WebSocket, consumed by animate()
+// ═══════════════════════════════════════════════════════════════════════════════
+const audioData = {
+  beat: false, beatStrength: 0, volume: 0,
+  bandEnergy: [0, 0, 0, 0, 0, 0], dominantFreq: 0,
+};
+
+let beatFlash         = 0;   // spikes to 0.3 on beat, decays to 0
+let beatStrengthDecay = 0;   // spikes to beat_strength, decays to 0
+const BEAT_FLASH_DECAY     = 0.3;   // seconds to decay from peak to zero
+const BEAT_STRENGTH_DECAY  = 0.4;  // seconds to decay from peak to zero
+
+let prevTimestamp = 0;   // last RAF timestamp (ms)
+let shaderTime    = 0;   // running shader clock (seconds)
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Photo display helpers
@@ -320,11 +391,17 @@ function loadPhotoToMesh(file) {
             uVignetteAspect: { value: aspect },
             uVignetteScale:  { value: vignetteScale },
             uEllipseRatio:   { value: ellipseRatio },
+            // Audio-reactive uniforms (driven by animate() each frame)
+            uBass:           { value: 0 },
+            uBeatStrength:   { value: 0 },
+            uBeatFlash:      { value: 0 },
+            uTime:           { value: shaderTime },
           },
           vertexShader,
           fragmentShader,
         });
-        const geo = new THREE.PlaneGeometry(1, 1);
+        // 32×32 segments give enough vertices for smooth displacement
+        const geo = new THREE.PlaneGeometry(1, 1, 32, 32);
 
         if (photoMesh) {
           photoMesh.material.uniforms.uTexture.value.dispose();
@@ -764,12 +841,19 @@ function connect() {
   ws.addEventListener('message', (event) => {
     try {
       const data = JSON.parse(event.data);
-      console.log('[audio]', data);
-      // data.beat          — boolean
-      // data.beat_strength — float 0-1
-      // data.volume        — float 0-1
-      // data.band_energy   — float[] (per-band energy)
-      // data.dominant_freq — float Hz
+
+      // Store latest values for the animate() loop to consume
+      audioData.beat         = data.beat;
+      audioData.beatStrength = data.beat_strength;
+      audioData.volume       = data.volume;
+      audioData.bandEnergy   = data.band_energy;
+      audioData.dominantFreq = data.dominant_freq;
+
+      // Spike decaying values on each detected beat
+      if (data.beat) {
+        beatFlash         = 0.3;
+        beatStrengthDecay = Math.max(beatStrengthDecay, data.beat_strength);
+      }
     } catch (err) {
       console.warn('[chooon-viz] Failed to parse message:', event.data);
     }
