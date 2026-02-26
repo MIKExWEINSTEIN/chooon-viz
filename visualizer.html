@@ -175,6 +175,9 @@ window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
+  rtScene.setSize(window.innerWidth, window.innerHeight);
+  rtEchoA.setSize(window.innerWidth, window.innerHeight);
+  rtEchoB.setSize(window.innerWidth, window.innerHeight);
   resizeOverlayCanvas();
   resizePhoto();
   updateAllHandles();
@@ -202,7 +205,29 @@ function animate(ts = 0) {
     beatStrengthDecay = Math.max(0, beatStrengthDecay - dt / BEAT_STRENGTH_DECAY);
   }
 
+  // ── Dub echo feedback pipeline ───────────────────────────────────────────
+  // 1. Render the photo scene (all shaders) into rtScene
+  renderer.setRenderTarget(rtScene);
   renderer.render(scene, camera);
+
+  // 2. Feedback pass: blend rtScene (fresh) + rtEchoA (accumulated echo) → rtEchoB
+  feedbackMat.uniforms.uCurrentFrame.value  = rtScene.texture;
+  feedbackMat.uniforms.uPreviousFrame.value = rtEchoA.texture;
+  feedbackMat.uniforms.uDecay.value         = echoDecay;
+  feedbackMat.uniforms.uScale.value         = echoScale;
+  feedbackMat.uniforms.uRotation.value      = echoRotation;
+  feedbackMat.uniforms.uBass.value          = audioData.bandEnergy[1] ?? 0;
+  feedbackMat.uniforms.uVolume.value        = audioData.volume;
+  renderer.setRenderTarget(rtEchoB);
+  renderer.render(feedbackScene, feedbackCamera);
+
+  // 3. Blit: render rtEchoB (feedback result) to the screen
+  blitMat.uniforms.uMap.value = rtEchoB.texture;
+  renderer.setRenderTarget(null);
+  renderer.render(blitScene, blitCamera);
+
+  // 4. Swap ping-pong: rtEchoB becomes the new "previous" for next frame
+  const tmp = rtEchoA; rtEchoA = rtEchoB; rtEchoB = tmp;
 }
 animate();
 
@@ -320,6 +345,89 @@ const BEAT_STRENGTH_DECAY  = 0.4;  // seconds to decay from peak to zero
 
 let prevTimestamp = 0;   // last RAF timestamp (ms)
 let shaderTime    = 0;   // running shader clock (seconds)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Dub echo — feedback loop controls (expose for control panel later)
+// ═══════════════════════════════════════════════════════════════════════════════
+let echoDecay    = 0.92;    // 0.85–0.99  fraction of echo surviving each frame
+let echoScale    = 0.997;   // 0.990–0.999 previous echo shrinks → tunnel zoom-in
+let echoRotation = 0.002;   // 0.0–0.008  radians per frame the echo slowly spins
+
+// Three render targets: current scene capture + two ping-pong echo accumulators
+const rtScene = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
+let   rtEchoA = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
+let   rtEchoB = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
+
+// Feedback shader — blends current frame with scaled/rotated previous echo
+const feedbackVertShader = /* glsl */`
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const feedbackFragShader = /* glsl */`
+  uniform sampler2D uCurrentFrame;   // this frame's scene render
+  uniform sampler2D uPreviousFrame;  // accumulated echo from last frame
+  uniform float uDecay;              // 0–1: fraction of echo that survives
+  uniform float uScale;              // < 1.0: echo shrinks inward → tunnel effect
+  uniform float uRotation;           // radians/frame: echo slowly rotates
+  uniform float uBass;               // 0–1: adds to rotation speed on bass hits
+  uniform float uVolume;             // 0–1: adds to decay (louder = longer tails)
+
+  varying vec2 vUv;
+
+  void main() {
+    vec2  center = vec2(0.5);
+    vec2  d      = vUv - center;
+
+    // Audio modulation — bass spins the tunnel, volume lengthens the tails
+    float angle = uRotation + uBass * 0.005;
+    float decay = min(0.985, uDecay + uVolume * 0.05);
+
+    // Expand offset so previous echo appears slightly smaller (creates tunnel)
+    vec2 sd = d / uScale;
+
+    // Rotate the scaled offset for the previous-frame sample position
+    float ca = cos(angle), sa = sin(angle);
+    vec2  rd = vec2(sd.x * ca - sd.y * sa, sd.x * sa + sd.y * ca);
+
+    vec4 current  = texture2D(uCurrentFrame,  vUv);
+    vec4 previous = texture2D(uPreviousFrame, center + rd);
+
+    // Additive blend — clamp prevents overexposure
+    // Vignette's black edges ensure echo rings appear in dark border regions
+    gl_FragColor = clamp(current + previous * decay, 0.0, 1.0);
+  }
+`;
+
+const feedbackCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const feedbackScene  = new THREE.Scene();
+const feedbackMat    = new THREE.ShaderMaterial({
+  uniforms: {
+    uCurrentFrame:  { value: null },
+    uPreviousFrame: { value: null },
+    uDecay:         { value: echoDecay },
+    uScale:         { value: echoScale },
+    uRotation:      { value: echoRotation },
+    uBass:          { value: 0 },
+    uVolume:        { value: 0 },
+  },
+  vertexShader:   feedbackVertShader,
+  fragmentShader: feedbackFragShader,
+});
+feedbackScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), feedbackMat));
+
+// Pass-through blit: renders echo buffer to the screen
+const blitCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const blitScene  = new THREE.Scene();
+const blitMat    = new THREE.ShaderMaterial({
+  uniforms: { uMap: { value: null } },
+  vertexShader:   `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `uniform sampler2D uMap; varying vec2 vUv; void main() { gl_FragColor = texture2D(uMap, vUv); }`,
+});
+blitScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), blitMat));
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Photo display helpers
