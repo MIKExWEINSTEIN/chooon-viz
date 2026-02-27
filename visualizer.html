@@ -194,10 +194,10 @@ function animate(ts = 0) {
   if (photoMesh) {
     const u = photoMesh.material.uniforms;
 
-    // Feed audio values
-    u.uBass.value         = audioData.bandEnergy[1] ?? 0;
+    // Feed audio values — effectIntensity scales bass displacement + chromatic aberration
+    u.uBass.value         = (audioData.bandEnergy[1] ?? 0) * effectIntensity;
     u.uBeatFlash.value    = beatFlash;
-    u.uBeatStrength.value = beatStrengthDecay;
+    u.uBeatStrength.value = beatStrengthDecay * effectIntensity;
     u.uTime.value         = shaderTime;
 
     // Exponential-style linear decay toward zero
@@ -328,7 +328,7 @@ let vignetteScale    = 1.0;
 let ellipseRatio     = 1.0;   // user-adjustable width:height multiplier
 
 let perfTimer        = null;
-const PERF_INTERVAL  = 45000;
+let   perfInterval   = 45000;   // ms, updated via BroadcastChannel
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Audio state — updated by WebSocket, consumed by animate()
@@ -345,6 +345,10 @@ const BEAT_STRENGTH_DECAY  = 0.4;  // seconds to decay from peak to zero
 
 let prevTimestamp = 0;   // last RAF timestamp (ms)
 let shaderTime    = 0;   // running shader clock (seconds)
+
+// Control panel multipliers — updated via BroadcastChannel
+let beatSensitivity = 1.35;  // 0.5–3.0: scales beat spike magnitude
+let effectIntensity = 1.0;   // 0.0–2.0: master scale for bass + chromatic aberration
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Dub echo — feedback loop controls (expose for control panel later)
@@ -839,7 +843,7 @@ function schedulePerfAdvance() {
     if (appMode !== 'performance') return;
     await showPerfPhoto((currentPhotoIdx + 1) % queue.length);
     schedulePerfAdvance();
-  }, PERF_INTERVAL);
+  }, perfInterval);
 }
 
 async function startPerformance(startIdx = 0) {
@@ -847,7 +851,7 @@ async function startPerformance(startIdx = 0) {
   hideAdjustUI();
   await showPerfPhoto(startIdx);
   schedulePerfAdvance();
-  console.log('[chooon-viz] Performance mode — cycling every', PERF_INTERVAL / 1000, 's');
+  console.log('[chooon-viz] Performance mode — cycling every', perfInterval / 1000, 's');
 }
 
 async function enterAdjustFromPerf(idx) {
@@ -957,10 +961,10 @@ function connect() {
       audioData.bandEnergy   = data.band_energy;
       audioData.dominantFreq = data.dominant_freq;
 
-      // Spike decaying values on each detected beat
+      // Spike decaying values on each detected beat — beatSensitivity scales magnitude
       if (data.beat) {
-        beatFlash         = 0.3;
-        beatStrengthDecay = Math.max(beatStrengthDecay, data.beat_strength);
+        beatFlash         = Math.min(0.6, 0.3 * beatSensitivity);
+        beatStrengthDecay = Math.max(beatStrengthDecay, data.beat_strength * beatSensitivity);
       }
     } catch (err) {
       console.warn('[chooon-viz] Failed to parse message:', event.data);
@@ -978,6 +982,29 @@ function connect() {
     ws.close();
   });
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// BroadcastChannel — receives param updates from controls.html
+// ═══════════════════════════════════════════════════════════════════════════════
+const ctrlChannel = new BroadcastChannel('chooon-viz-controls');
+
+ctrlChannel.addEventListener('message', (event) => {
+  const msg = event.data;
+  if (!msg || msg.type !== 'param') return;
+  const { key, value } = msg;
+
+  switch (key) {
+    case 'echoDecay':       echoDecay       = value; break;
+    case 'echoRotation':    echoRotation    = value; break;
+    case 'echoScale':       echoScale       = value; break;
+    case 'perfCycleTime':   perfInterval    = value * 1000; break;  // slider sends seconds
+    case 'beatSensitivity': beatSensitivity = value; break;
+    case 'effectIntensity': effectIntensity = value; break;
+    default: console.warn('[chooon-viz] Unknown param:', key);
+  }
+
+  console.log(`[chooon-viz] ← ${key} = ${value}`);
+});
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Init

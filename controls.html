@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>chooon-viz · controls</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0a0a0a;
+      color: rgba(255,255,255,0.8);
+      font-family: monospace;
+      font-size: 12px;
+      padding: 24px 28px;
+      min-height: 100vh;
+    }
+
+    h1 {
+      font-size: 11px;
+      letter-spacing: 0.14em;
+      color: rgba(255,255,255,0.25);
+      text-transform: uppercase;
+      margin-bottom: 6px;
+    }
+
+    #status {
+      display: inline-block;
+      font-size: 10px;
+      padding: 3px 8px;
+      border-radius: 3px;
+      margin-bottom: 26px;
+      letter-spacing: 0.05em;
+    }
+    #status.connected    { background: rgba(0,255,80,0.10);  color: #00ff50; border: 1px solid rgba(0,255,80,0.25); }
+    #status.disconnected { background: rgba(255,40,40,0.10); color: #ff4040; border: 1px solid rgba(255,40,40,0.25); }
+
+    /* ── Sections ── */
+    section { margin-bottom: 28px; }
+
+    .section-title {
+      font-size: 9px;
+      letter-spacing: 0.16em;
+      color: rgba(255,255,255,0.22);
+      text-transform: uppercase;
+      padding-bottom: 7px;
+      margin-bottom: 14px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+
+    /* ── Volume bar ── */
+    .meter-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .meter-label {
+      width: 48px;
+      font-size: 10px;
+      color: rgba(255,255,255,0.35);
+      flex-shrink: 0;
+    }
+
+    .meter-track {
+      flex: 1;
+      height: 5px;
+      background: rgba(255,255,255,0.07);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .meter-fill {
+      height: 100%;
+      border-radius: 3px;
+      width: 0%;
+    }
+
+    #m-volume { background: rgba(60,180,255,0.75); }
+
+    /* ── Beat dot ── */
+    #beat-dot {
+      width: 11px; height: 11px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.12);
+      flex-shrink: 0;
+      transition: background 0.05s, box-shadow 0.05s;
+    }
+    #beat-dot.lit {
+      background: rgba(255,210,0,0.95);
+      box-shadow: 0 0 7px rgba(255,210,0,0.55);
+    }
+
+    /* ── Band meters ── */
+    .band-grid {
+      display: flex;
+      gap: 5px;
+    }
+
+    .band-col {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .band-track {
+      width: 100%;
+      height: 44px;
+      background: rgba(255,255,255,0.06);
+      border-radius: 2px;
+      display: flex;
+      align-items: flex-end;
+      overflow: hidden;
+    }
+
+    .band-fill {
+      width: 100%;
+      height: 0%;
+      background: rgba(0,220,120,0.65);
+      border-radius: 2px;
+    }
+
+    .band-name {
+      font-size: 8px;
+      color: rgba(255,255,255,0.25);
+      letter-spacing: 0.04em;
+    }
+
+    /* ── Sliders ── */
+    .param-row {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 11px;
+    }
+
+    .param-label {
+      width: 118px;
+      font-size: 11px;
+      color: rgba(255,255,255,0.50);
+      flex-shrink: 0;
+      letter-spacing: 0.02em;
+    }
+
+    input[type=range] {
+      flex: 1;
+      -webkit-appearance: none;
+      appearance: none;
+      height: 3px;
+      background: rgba(255,255,255,0.11);
+      border-radius: 2px;
+      outline: none;
+      cursor: pointer;
+    }
+
+    input[type=range]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 13px; height: 13px;
+      border-radius: 50%;
+      background: rgba(255,255,255,0.82);
+      cursor: pointer;
+      transition: background 0.12s;
+    }
+
+    input[type=range]::-webkit-slider-thumb:hover { background: #fff; }
+
+    .param-value {
+      width: 58px;
+      text-align: right;
+      font-size: 11px;
+      color: rgba(255,255,255,0.65);
+      flex-shrink: 0;
+    }
+  </style>
+</head>
+<body>
+
+<h1>chooon-viz · controls</h1>
+<div id="status" class="disconnected">Disconnected</div>
+
+<!-- ── Audio Monitor ─────────────────────────────────────────────────────── -->
+<section>
+  <div class="section-title">Audio Monitor</div>
+
+  <div class="meter-row">
+    <div class="meter-label">Volume</div>
+    <div class="meter-track"><div class="meter-fill" id="m-volume"></div></div>
+    <div id="beat-dot"></div>
+  </div>
+
+  <div class="band-grid">
+    <div class="band-col">
+      <div class="band-track"><div class="band-fill" id="b0"></div></div>
+      <div class="band-name">Sub</div>
+    </div>
+    <div class="band-col">
+      <div class="band-track"><div class="band-fill" id="b1"></div></div>
+      <div class="band-name">Bass</div>
+    </div>
+    <div class="band-col">
+      <div class="band-track"><div class="band-fill" id="b2"></div></div>
+      <div class="band-name">Lo-Mid</div>
+    </div>
+    <div class="band-col">
+      <div class="band-track"><div class="band-fill" id="b3"></div></div>
+      <div class="band-name">Mid</div>
+    </div>
+    <div class="band-col">
+      <div class="band-track"><div class="band-fill" id="b4"></div></div>
+      <div class="band-name">High</div>
+    </div>
+    <div class="band-col">
+      <div class="band-track"><div class="band-fill" id="b5"></div></div>
+      <div class="band-name">Air</div>
+    </div>
+  </div>
+</section>
+
+<!-- ── Echo ──────────────────────────────────────────────────────────────── -->
+<section>
+  <div class="section-title">Echo</div>
+
+  <div class="param-row">
+    <div class="param-label">Echo Decay</div>
+    <input type="range" id="s-echoDecay" min="0.80" max="0.99" step="0.001" value="0.89" />
+    <div class="param-value" id="v-echoDecay">0.890</div>
+  </div>
+
+  <div class="param-row">
+    <div class="param-label">Echo Rotation</div>
+    <input type="range" id="s-echoRotation" min="0.0000" max="0.008" step="0.0001" value="0.001" />
+    <div class="param-value" id="v-echoRotation">0.0010</div>
+  </div>
+
+  <div class="param-row">
+    <div class="param-label">Echo Scale</div>
+    <input type="range" id="s-echoScale" min="0.990" max="0.999" step="0.0001" value="0.999" />
+    <div class="param-value" id="v-echoScale">0.9990</div>
+  </div>
+</section>
+
+<!-- ── Performance ───────────────────────────────────────────────────────── -->
+<section>
+  <div class="section-title">Performance</div>
+
+  <div class="param-row">
+    <div class="param-label">Photo Cycle</div>
+    <input type="range" id="s-perfCycleTime" min="30" max="300" step="5" value="45" />
+    <div class="param-value" id="v-perfCycleTime">45 sec</div>
+  </div>
+</section>
+
+<!-- ── Effects ────────────────────────────────────────────────────────────── -->
+<section>
+  <div class="section-title">Effects</div>
+
+  <div class="param-row">
+    <div class="param-label">Beat Sensitivity</div>
+    <input type="range" id="s-beatSensitivity" min="0.5" max="3.0" step="0.05" value="1.35" />
+    <div class="param-value" id="v-beatSensitivity">1.35</div>
+  </div>
+
+  <div class="param-row">
+    <div class="param-label">Effect Intensity</div>
+    <input type="range" id="s-effectIntensity" min="0.0" max="2.0" step="0.05" value="1.0" />
+    <div class="param-value" id="v-effectIntensity">1.00</div>
+  </div>
+</section>
+
+<script>
+// ═══════════════════════════════════════════════════════════════════════════════
+// BroadcastChannel — sends param changes to visualizer.html
+// ═══════════════════════════════════════════════════════════════════════════════
+const channel = new BroadcastChannel('chooon-viz-controls');
+
+function broadcast(key, value) {
+  channel.postMessage({ type: 'param', key, value });
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Slider setup — each entry wires input → display label + broadcast
+// ═══════════════════════════════════════════════════════════════════════════════
+const sliders = [
+  { id: 's-echoDecay',       key: 'echoDecay',       fmt: v => v.toFixed(3)         },
+  { id: 's-echoRotation',    key: 'echoRotation',     fmt: v => v.toFixed(4)         },
+  { id: 's-echoScale',       key: 'echoScale',        fmt: v => v.toFixed(4)         },
+  { id: 's-perfCycleTime',   key: 'perfCycleTime',    fmt: v => `${Math.round(v)} sec` },
+  { id: 's-beatSensitivity', key: 'beatSensitivity',  fmt: v => v.toFixed(2)         },
+  { id: 's-effectIntensity', key: 'effectIntensity',  fmt: v => v.toFixed(2)         },
+];
+
+sliders.forEach(({ id, key, fmt }) => {
+  const slider = document.getElementById(id);
+  const valEl  = document.getElementById(id.replace('s-', 'v-'));
+  slider.addEventListener('input', () => {
+    const val = parseFloat(slider.value);
+    valEl.textContent = fmt(val);
+    broadcast(key, val);
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Audio meter elements
+// ═══════════════════════════════════════════════════════════════════════════════
+const mVolume   = document.getElementById('m-volume');
+const bandFills = [0,1,2,3,4,5].map(i => document.getElementById(`b${i}`));
+const beatDotEl = document.getElementById('beat-dot');
+let   beatTimer = null;
+
+function flashBeat() {
+  beatDotEl.classList.add('lit');
+  clearTimeout(beatTimer);
+  beatTimer = setTimeout(() => beatDotEl.classList.remove('lit'), 130);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// WebSocket — mirrors audio_server.py stream for live meters
+// ═══════════════════════════════════════════════════════════════════════════════
+const WS_URL    = 'ws://localhost:8765';
+const RECONNECT = 2000;
+const statusEl  = document.getElementById('status');
+
+function setStatus(connected) {
+  statusEl.textContent = connected ? 'Connected' : 'Disconnected';
+  statusEl.className   = connected ? 'connected'  : 'disconnected';
+}
+
+function connect() {
+  const ws = new WebSocket(WS_URL);
+
+  ws.addEventListener('open', () => {
+    setStatus(true);
+    console.log('[controls] Connected to', WS_URL);
+  });
+
+  ws.addEventListener('message', (event) => {
+    try {
+      const data = JSON.parse(event.data);
+
+      // Volume bar (data.volume expected 0–1)
+      mVolume.style.width = Math.min(100, (data.volume ?? 0) * 100) + '%';
+
+      // Band bars (data.band_energy: float[6], each 0–1)
+      if (Array.isArray(data.band_energy)) {
+        data.band_energy.forEach((v, i) => {
+          if (bandFills[i]) bandFills[i].style.height = Math.min(100, v * 100) + '%';
+        });
+      }
+
+      // Beat flash indicator
+      if (data.beat) flashBeat();
+
+    } catch (err) {
+      console.warn('[controls] Parse error:', err);
+    }
+  });
+
+  ws.addEventListener('close', () => {
+    setStatus(false);
+    setTimeout(connect, RECONNECT);
+  });
+
+  ws.addEventListener('error', () => ws.close());
+}
+
+connect();
+</script>
+</body>
+</html>
