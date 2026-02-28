@@ -178,6 +178,8 @@ window.addEventListener('resize', () => {
   rtScene.setSize(window.innerWidth, window.innerHeight);
   rtEchoA.setSize(window.innerWidth, window.innerHeight);
   rtEchoB.setSize(window.innerWidth, window.innerHeight);
+  rtTile.setSize(window.innerWidth, window.innerHeight);
+  rtKaleid.setSize(window.innerWidth, window.innerHeight);
   resizeOverlayCanvas();
   resizePhoto();
   updateAllHandles();
@@ -205,13 +207,50 @@ function animate(ts = 0) {
     beatStrengthDecay = Math.max(0, beatStrengthDecay - dt / BEAT_STRENGTH_DECAY);
   }
 
-  // ── Dub echo feedback pipeline ───────────────────────────────────────────
-  // 1. Render the photo scene (all shaders) into rtScene
+  // ── Tile offset drift + beat scramble ─────────────────────────────────────
+  if (tileEnabled) {
+    const n = tileGrid * tileGrid;
+    for (let i = 0; i < n; i++) {
+      tileOffsets[i].x += (Math.random() - 0.5) * 0.004;
+      tileOffsets[i].y += (Math.random() - 0.5) * 0.004;
+    }
+    if (tileBeatPending) {
+      for (let i = 0; i < n; i++) {
+        tileOffsets[i].x += (Math.random() - 0.5) * 2.0 * tileScramble;
+        tileOffsets[i].y += (Math.random() - 0.5) * 2.0 * tileScramble;
+      }
+    }
+    tileMat.uniforms.uTileGrid.value = tileGrid;
+    // Array elements mutated in-place; Three.js re-uploads vec2 array each frame
+  }
+  tileBeatPending = false;  // clear even when disabled, so no stale beats on enable
+
+  // ── Render pipeline ───────────────────────────────────────────────────────
+  // 1. Photo scene (vignette + shaders) → rtScene
   renderer.setRenderTarget(rtScene);
   renderer.render(scene, camera);
 
-  // 2. Feedback pass: blend rtScene (fresh) + rtEchoA (accumulated echo) → rtEchoB
-  feedbackMat.uniforms.uCurrentFrame.value  = rtScene.texture;
+  // 2. Tile pass: rtScene → rtTile  (skipped if disabled — tileSource stays rtScene)
+  let tileSource = rtScene;
+  if (tileEnabled) {
+    tileMat.uniforms.uTex.value = rtScene.texture;
+    renderer.setRenderTarget(rtTile);
+    renderer.render(tileScene, tileCamera);
+    tileSource = rtTile;
+  }
+
+  // 3. Kaleidoscope pass: [tile result] → rtKaleid  (skipped if disabled)
+  let kaleidSource = tileSource;
+  if (kaleidEnabled) {
+    kaleidMat.uniforms.uTex.value        = tileSource.texture;
+    kaleidMat.uniforms.uKaleidFolds.value = kaleidFolds;
+    renderer.setRenderTarget(rtKaleid);
+    renderer.render(kaleidScene, kaleidCamera);
+    kaleidSource = rtKaleid;
+  }
+
+  // 4. Echo feedback: [kaleid result] + rtEchoA → rtEchoB
+  feedbackMat.uniforms.uCurrentFrame.value  = kaleidSource.texture;
   feedbackMat.uniforms.uPreviousFrame.value = rtEchoA.texture;
   feedbackMat.uniforms.uDecay.value         = echoDecay;
   feedbackMat.uniforms.uScale.value         = echoScale;
@@ -221,12 +260,12 @@ function animate(ts = 0) {
   renderer.setRenderTarget(rtEchoB);
   renderer.render(feedbackScene, feedbackCamera);
 
-  // 3. Blit: render rtEchoB (feedback result) to the screen
+  // 5. Blit echo result to screen
   blitMat.uniforms.uMap.value = rtEchoB.texture;
   renderer.setRenderTarget(null);
   renderer.render(blitScene, blitCamera);
 
-  // 4. Swap ping-pong: rtEchoB becomes the new "previous" for next frame
+  // 6. Swap echo ping-pong buffers
   const tmp = rtEchoA; rtEchoA = rtEchoB; rtEchoB = tmp;
 }
 animate();
@@ -432,6 +471,92 @@ const blitMat    = new THREE.ShaderMaterial({
   fragmentShader: `uniform sampler2D uMap; varying vec2 vUv; void main() { gl_FragColor = texture2D(uMap, vUv); }`,
 });
 blitScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), blitMat));
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Tile scramble pass — continuous UV drift + beat-triggered scramble
+// ═══════════════════════════════════════════════════════════════════════════════
+let tileEnabled     = false;
+let tileGrid        = 4;       // 2–8, grid is NxN
+let tileScramble    = 0.04;    // beat-jump magnitude in UV units
+let tileBeatPending = false;   // set by WS handler, consumed by animate()
+
+const TILE_MAX    = 64;        // supports up to 8×8 = 64 tiles
+const tileOffsets = Array.from({ length: TILE_MAX }, () => new THREE.Vector2(0, 0));
+const rtTile      = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
+
+const tileFragShader = /* glsl */`
+  uniform sampler2D uTex;
+  uniform int       uTileGrid;
+  uniform vec2      uTileOffsets[64];
+
+  varying vec2 vUv;
+
+  void main() {
+    float n       = float(uTileGrid);
+    vec2  tilePos = floor(vUv * n);          // tile coordinate, each axis 0..n-1
+    int   idx     = int(tilePos.y) * uTileGrid + int(tilePos.x);
+    vec2  offset  = uTileOffsets[idx];
+    // Wrap within [0,1] so tiles sample from elsewhere in the image
+    gl_FragColor  = texture2D(uTex, mod(vUv + offset, 1.0));
+  }
+`;
+
+const tileCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const tileScene  = new THREE.Scene();
+const tileMat    = new THREE.ShaderMaterial({
+  uniforms: {
+    uTex:         { value: null },
+    uTileGrid:    { value: tileGrid },
+    uTileOffsets: { value: tileOffsets },   // shared array, elements mutated in-place
+  },
+  vertexShader:   `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: tileFragShader,
+});
+tileScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), tileMat));
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Kaleidoscope pass — N-fold polar symmetry
+// ═══════════════════════════════════════════════════════════════════════════════
+let kaleidEnabled = false;
+let kaleidFolds   = 4;   // 2–8 fold symmetry
+
+const rtKaleid = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeight);
+
+const kaleidFragShader = /* glsl */`
+  uniform sampler2D uTex;
+  uniform int       uKaleidFolds;
+
+  varying vec2 vUv;
+
+  #define PI 3.14159265358979
+
+  void main() {
+    vec2  d  = vUv - 0.5;
+    float r  = length(d);
+    float a  = atan(d.y, d.x);              // [-PI, PI]
+    a = mod(a + 2.0 * PI, 2.0 * PI);        // remap to [0, 2PI]
+
+    float folds = float(uKaleidFolds);
+    float seg   = 2.0 * PI / folds;         // angle of one segment
+    float ai    = mod(a, seg);              // fold angle into [0, seg)
+    if (ai > seg * 0.5) ai = seg - ai;     // mirror for smooth join at boundaries
+
+    vec2 folded = r * vec2(cos(ai), sin(ai)) + 0.5;
+    gl_FragColor = texture2D(uTex, clamp(folded, 0.0, 1.0));
+  }
+`;
+
+const kaleidCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const kaleidScene  = new THREE.Scene();
+const kaleidMat    = new THREE.ShaderMaterial({
+  uniforms: {
+    uTex:         { value: null },
+    uKaleidFolds: { value: kaleidFolds },
+  },
+  vertexShader:   `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: kaleidFragShader,
+});
+kaleidScene.add(new THREE.Mesh(new THREE.PlaneGeometry(2, 2), kaleidMat));
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Photo display helpers
@@ -965,6 +1090,7 @@ function connect() {
       if (data.beat) {
         beatFlash         = Math.min(0.6, 0.3 * beatSensitivity);
         beatStrengthDecay = Math.max(beatStrengthDecay, data.beat_strength * beatSensitivity);
+        tileBeatPending   = true;   // tile scramble jump, processed in animate()
       }
     } catch (err) {
       console.warn('[chooon-viz] Failed to parse message:', event.data);
@@ -1000,6 +1126,11 @@ ctrlChannel.addEventListener('message', (event) => {
     case 'perfCycleTime':   perfInterval    = value * 1000; break;  // slider sends seconds
     case 'beatSensitivity': beatSensitivity = value; break;
     case 'effectIntensity': effectIntensity = value; break;
+    case 'tileEnabled':     tileEnabled     = !!value; break;
+    case 'tileGrid':        tileGrid        = Math.max(2, Math.min(8, Math.round(value))); break;
+    case 'tileScramble':    tileScramble    = value; break;
+    case 'kaleidEnabled':   kaleidEnabled   = !!value; break;
+    case 'kaleidFolds':     kaleidFolds     = Math.max(2, Math.min(8, Math.round(value))); break;
     default: console.warn('[chooon-viz] Unknown param:', key);
   }
 
