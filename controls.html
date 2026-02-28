@@ -195,12 +195,68 @@
       cursor: pointer;
       flex-shrink: 0;
     }
+
+    /* ── Preset bar ── */
+    .preset-bar {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 24px;
+    }
+
+    .preset-btn {
+      flex: 1;
+      font-family: monospace;
+      font-size: 10px;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+      padding: 6px 0;
+      border-radius: 20px;
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(255,255,255,0.04);
+      color: rgba(255,255,255,0.35);
+      cursor: pointer;
+      transition: background 0.18s, color 0.18s, border-color 0.18s, box-shadow 0.18s;
+    }
+
+    .preset-btn:hover {
+      background: rgba(255,255,255,0.08);
+      color: rgba(255,255,255,0.65);
+      border-color: rgba(255,255,255,0.18);
+    }
+
+    .preset-btn.active-drift {
+      background: rgba(0,180,160,0.14);
+      color: rgba(0,230,200,0.9);
+      border-color: rgba(0,200,180,0.38);
+      box-shadow: 0 0 12px rgba(0,180,160,0.12);
+    }
+
+    .preset-btn.active-pulse {
+      background: rgba(220,150,0,0.14);
+      color: rgba(255,190,40,0.92);
+      border-color: rgba(220,160,0,0.40);
+      box-shadow: 0 0 12px rgba(220,150,0,0.12);
+    }
+
+    .preset-btn.active-storm {
+      background: rgba(200,30,30,0.14);
+      color: rgba(255,80,80,0.92);
+      border-color: rgba(200,50,50,0.40);
+      box-shadow: 0 0 12px rgba(200,30,30,0.12);
+    }
   </style>
 </head>
 <body>
 
 <h1>chooon-viz · controls</h1>
 <div id="status" class="disconnected">Disconnected</div>
+
+<!-- ── Presets ────────────────────────────────────────────────────────────── -->
+<div class="preset-bar">
+  <button class="preset-btn" id="p-drift">Drift</button>
+  <button class="preset-btn" id="p-pulse">Pulse</button>
+  <button class="preset-btn" id="p-storm">Storm</button>
+</div>
 
 <!-- ── Audio Monitor ─────────────────────────────────────────────────────── -->
 <section>
@@ -334,6 +390,76 @@ function broadcast(key, value) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// Presets — named snapshots of all parameters
+// ═══════════════════════════════════════════════════════════════════════════════
+const PRESETS = {
+  drift: {
+    echoDecay: 0.92, echoRotation: 0.001,  echoScale: 0.999,
+    effectIntensity: 0.6,
+    tileEnabled: false, tileGrid: 4, tileScramble: 0.02,
+    kaleidEnabled: false, kaleidFolds: 4,  kaleidZoom: 1.0,
+    perfCycleTime: 120, beatSensitivity: 1.0,
+  },
+  pulse: {
+    echoDecay: 0.89, echoRotation: 0.002,  echoScale: 0.998,
+    effectIntensity: 1.2,
+    tileEnabled: true,  tileGrid: 4, tileScramble: 0.05,
+    kaleidEnabled: false, kaleidFolds: 4,  kaleidZoom: 1.0,
+    perfCycleTime: 60,  beatSensitivity: 1.35,
+  },
+  storm: {
+    echoDecay: 0.94, echoRotation: 0.004,  echoScale: 0.997,
+    effectIntensity: 1.8,
+    tileEnabled: true,  tileGrid: 6, tileScramble: 0.12,
+    kaleidEnabled: true,  kaleidFolds: 6,  kaleidZoom: 0.7,
+    perfCycleTime: 30,  beatSensitivity: 1.8,
+  },
+};
+
+// Maps populated by the sliders/toggles setup loops below
+const sliderMap = {};   // key → { slider, valEl, fmt }
+const toggleMap = {};   // key → checkbox element
+
+const presetBtns = {
+  drift: document.getElementById('p-drift'),
+  pulse: document.getElementById('p-pulse'),
+  storm: document.getElementById('p-storm'),
+};
+
+// Remove the active highlight from all preset buttons
+function clearPreset() {
+  Object.values(presetBtns).forEach(b => { b.className = 'preset-btn'; });
+}
+
+// Apply a named preset: update all UI elements, broadcast every param
+function applyPreset(name) {
+  const p = PRESETS[name];
+  if (!p) return;
+
+  for (const [key, value] of Object.entries(p)) {
+    if (sliderMap[key]) {
+      const { slider, valEl, fmt } = sliderMap[key];
+      slider.value      = value;
+      valEl.textContent = fmt(value);
+    } else if (key in toggleMap) {
+      toggleMap[key].checked = value;
+    }
+    // Always broadcast (covers kaleidZoom and future params without UI elements)
+    broadcast(key, value);
+  }
+
+  // Highlight the active button, dim the others
+  Object.entries(presetBtns).forEach(([n, btn]) => {
+    btn.className = (n === name) ? `preset-btn active-${name}` : 'preset-btn';
+  });
+}
+
+// Wire preset buttons
+Object.entries(presetBtns).forEach(([name, btn]) => {
+  btn.addEventListener('click', () => applyPreset(name));
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // Slider setup — each entry wires input → display label + broadcast
 // ═══════════════════════════════════════════════════════════════════════════════
 const sliders = [
@@ -351,10 +477,12 @@ const sliders = [
 sliders.forEach(({ id, key, fmt }) => {
   const slider = document.getElementById(id);
   const valEl  = document.getElementById(id.replace('s-', 'v-'));
+  sliderMap[key] = { slider, valEl, fmt };
   slider.addEventListener('input', () => {
     const val = parseFloat(slider.value);
     valEl.textContent = fmt(val);
     broadcast(key, val);
+    clearPreset();   // manual change → deactivate preset highlight
   });
 });
 
@@ -365,7 +493,11 @@ const toggles = [
 ];
 toggles.forEach(({ id, key }) => {
   const cb = document.getElementById(id);
-  cb.addEventListener('change', () => broadcast(key, cb.checked));
+  toggleMap[key] = cb;
+  cb.addEventListener('change', () => {
+    broadcast(key, cb.checked);
+    clearPreset();   // manual change → deactivate preset highlight
+  });
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
