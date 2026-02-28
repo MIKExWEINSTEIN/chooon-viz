@@ -42,3 +42,27 @@ Now let me implement the feedback loop. The plan: add three render targets (rtSc
 
 Session 6 added a dub echo feedback loop using a 3-render-target ping-pong pipeline. Three THREE.WebGLRenderTarget objects were created: rtScene (captures the photo scene each frame), rtEchoA/rtEchoB (ping-pong echo accumulators). The animate() loop is now a 3-pass pipeline: (1) render the photo + all existing shaders into rtScene; (2) run the feedback ShaderMaterial — which samples the previous echo at a slightly scaled/rotated UV offset and additively blends it with the current frame — into rtEchoB; (3) blit rtEchoB to the screen via a pass-through shader; then swap A↔B. The feedback shader has uDecay (0.92), uScale (0.997, makes echo shrink → tunnel), uRotation (0.002 rad/frame), plus uBass (adds +0.005*bass to rotation) and uVolume (adds +volume*0.05 to decay, capped at 0.985). Three JS variables — echoDecay, echoScale, echoRotation — are exposed at the top of the echo block, ready for a future control panel. The resize handler now also calls .setSize() on all three render targets.
 
+What was added — summary for next session:
+
+controls.html is a new standalone control panel (dark #0a0a0a monospace aesthetic) that connects to the same WebSocket on localhost:8765. It displays a live audio monitor section with a horizontal volume bar, six vertical frequency-band bars (Sub/Bass/Lo-Mid/Mid/High/Air), and a beat flash dot. Six sliders across four sections (Echo: decay/rotation/scale; Performance: photo cycle time; Effects: beat sensitivity and effect intensity) broadcast { type: 'param', key, value } messages on a BroadcastChannel named 'chooon-viz-controls' whenever any slider changes.
+
+In Session 7:
+
+visualizer.html was updated with a matching BroadcastChannel listener that maps each key to the corresponding live variable: echoDecay, echoRotation, echoScale, perfInterval (converts seconds→ms), beatSensitivity, and effectIntensity. Two new variables were added — beatSensitivity (default 1.35) scales the beat flash and chromatic-aberration spike magnitudes in the WebSocket handler; effectIntensity (default 1.0) scales uBass and uBeatStrength uniforms in animate(). PERF_INTERVAL was converted from const to let perfInterval so the cycle timer is dynamically updatable.
+
+In Session 8: 
+
+Two new fullscreen shader passes were inserted into `visualizer.html` between the photo scene render and the echo feedback, making the pipeline 6 steps: scene → tile → kaleid → echo → blit → swap.
+
+Tile scramble pass (`rtScene → rtTile`): A GLSL fragment shader divides the image into an NxN grid (default 4×4, `tileGrid` 2–8), looks up a per-tile UV offset from `uniform vec2 uTileOffsets[64]`, and samples with `mod(uv + offset, 1.0)`. Each animate() frame all active tile offsets drift by ±0.002; on each detected beat the `tileBeatPending` flag causes a one-shot additional jump of ±`tileScramble` magnitude. Pass is skipped and `tileSource = rtScene` when `tileEnabled = false`.
+
+Kaleidoscope pass (`rtTile → rtKaleid`): GLSL converts UV to polar coords (`atan2` → `mod` by segment angle `2π/folds` → mirror at `seg/2` → back to cartesian), producing N-fold symmetry (default 4, `kaleidFolds` 2–8). Pass is skipped when `kaleidEnabled = false`. Both passes have render targets resized on window resize.
+
+`controls.html` gained a new "Visual FX" section with: Tile Scramble checkbox (`t-tileEnabled`), Tile Grid slider (2–8, displays "N×N"), Scramble Amount slider (0–0.2), Kaleidoscope checkbox (`t-kaleidEnabled`), Folds slider (2–8). Checkboxes broadcast booleans; sliders broadcast numbers — all via the existing `chooon-viz-controls` BroadcastChannel. The visualizer's BroadcastChannel listener handles all five new keys (`tileEnabled`, `tileGrid`, `tileScramble`, `kaleidEnabled`, `kaleidFolds`).
+
+In Session 9: 
+
+A Presets section was added to controls.html — three pill-shaped buttons (Drift, Pulse, Storm) placed above all other sections via a .preset-bar flex div. Each button has an inactive dark style and a distinct active glow: Drift = teal (active-drift), Pulse = amber (active-pulse), Storm = red (active-storm).
+
+The JS was restructured around two lookup maps — sliderMap (key → {slider, valEl, fmt}) and toggleMap (key → checkbox) — built inside the existing sliders.forEach and toggles.forEach loops. A PRESETS object holds all 12 parameter values per preset (including kaleidZoom which broadcasts but has no current UI element). applyPreset(name) iterates the preset's entries, updates the corresponding UI element via the map, and broadcasts each param individually; it then sets btn.className = 'preset-btn active-{name}' on the active button. clearPreset() strips all active classes and is called on every manual slider input or checkbox change event, so the highlight disappears as soon as the user overrides a preset value.
+
