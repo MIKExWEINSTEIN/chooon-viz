@@ -201,6 +201,10 @@ function animate(ts = 0) {
   prevTimestamp = ts;
   shaderTime   += dt;
 
+  // Vignette morph — update regardless of photoMesh existence
+  vignettePulseDecay = Math.max(0, vignettePulseDecay - dt * 3.0);
+  breathEnvelope     = Math.sin(shaderTime * 1.2);   // ~1.2 rad/s breathing cycle
+
   if (photoMesh) {
     const u = photoMesh.material.uniforms;
 
@@ -209,6 +213,13 @@ function animate(ts = 0) {
     u.uBeatFlash.value    = beatFlash;
     u.uBeatStrength.value = beatStrengthDecay * effectIntensity;
     u.uTime.value         = shaderTime;
+
+    // Vignette morph uniforms
+    u.uPulseAmount.value   = pulseEnabled   ? vignettePulseDecay * pulseAmplitude : 0;
+    u.uWobbleFreq.value    = wobbleFreq;
+    u.uWobbleAmp.value     = wobbleEnabled  ? wobbleAmp                           : 0;
+    u.uBreath.value        = breathEnvelope;
+    u.uBreatheAmount.value = breatheEnabled ? breatheAmplitude                    : 0;
 
     // Exponential-style linear decay toward zero
     beatFlash         = Math.max(0, beatFlash         - dt / BEAT_FLASH_DECAY);
@@ -325,6 +336,12 @@ const fragmentShader = /* glsl */`
   uniform float uBeatStrength;    // 0-1, drives chromatic aberration (with decay)
   uniform float uBeatFlash;       // 0-1, brief brightness spike on each beat
   uniform float uTime;            // seconds, drives film-grain animation
+  // Vignette morph
+  uniform float uPulseAmount;     // beat-driven scale addend (JS: pulseDecay * amplitude)
+  uniform float uWobbleFreq;      // waves around perimeter (2–12)
+  uniform float uWobbleAmp;       // wobble displacement (0 = disabled)
+  uniform float uBreath;          // breathe envelope value (−1..1 sine)
+  uniform float uBreatheAmount;   // breathe amplitude multiplier (0 = disabled)
 
   varying vec2 vUv;
 
@@ -344,10 +361,15 @@ const fragmentShader = /* glsl */`
     float grain = hash(vUv * 800.0 + vec2(uTime * 7.3, uTime * 11.7)) - 0.5;
 
     if (uVignetteEnabled) {
-      // ── Elliptical vignette ────────────────────────────────────────────────
+      // ── Elliptical vignette with morph effects ─────────────────────────────
       vec2  d        = vUv - uVignetteCenter;
+      float angle    = atan(d.y, d.x);
+      // Effective scale: base + edge-pulse addend + breathe oscillation
+      float effScale = uVignetteScale + uPulseAmount + uBreath * uBreatheAmount;
       float vDist    = length(vec2(d.x / (uVignetteAspect * uEllipseRatio), d.y))
-                         * uVignetteScale * 2.0;
+                         * effScale * 2.0;
+      // Edge wobble: perturb distance by a sine wave around the perimeter
+      vDist         += sin(angle * uWobbleFreq + uTime * 2.0) * uWobbleAmp;
       float vignette = 1.0 - smoothstep(0.35, 1.05, vDist);
       texColor.rgb  *= vignette;
       // Film grain follows vignette mask so edges stay black
@@ -406,6 +428,17 @@ let shaderTime    = 0;   // running shader clock (seconds)
 // Control panel multipliers — updated via BroadcastChannel
 let beatSensitivity = 1.35;  // 0.5–3.0: scales beat spike magnitude
 let effectIntensity = 1.0;   // 0.0–2.0: master scale for bass + chromatic aberration
+
+// Vignette morph state
+let vignettePulseDecay = 0;     // spikes to 1.0 on beat, decays at 3.0/s
+let breathEnvelope     = 0;     // sinusoidal breathe value (−1..1)
+let pulseEnabled       = false;
+let pulseAmplitude     = 0.1;
+let wobbleEnabled      = false;
+let wobbleFreq         = 6;
+let wobbleAmp          = 0.05;
+let breatheEnabled     = false;
+let breatheAmplitude   = 0.15;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Dub echo — feedback loop controls (expose for control panel later)
@@ -652,6 +685,12 @@ function loadPhotoToMesh(file) {
             uBeatStrength:    { value: 0 },
             uBeatFlash:       { value: 0 },
             uTime:            { value: shaderTime },
+            // Vignette morph uniforms
+            uPulseAmount:     { value: 0 },
+            uWobbleFreq:      { value: wobbleFreq },
+            uWobbleAmp:       { value: 0 },
+            uBreath:          { value: 0 },
+            uBreatheAmount:   { value: 0 },
           },
           vertexShader,
           fragmentShader,
@@ -1136,9 +1175,10 @@ function connect() {
 
       // Spike decaying values on each detected beat — beatSensitivity scales magnitude
       if (data.beat) {
-        beatFlash         = Math.min(0.6, 0.3 * beatSensitivity);
-        beatStrengthDecay = Math.max(beatStrengthDecay, data.beat_strength * beatSensitivity);
-        tileBeatPending   = true;   // tile scramble jump, processed in animate()
+        beatFlash          = Math.min(0.6, 0.3 * beatSensitivity);
+        beatStrengthDecay  = Math.max(beatStrengthDecay, data.beat_strength * beatSensitivity);
+        tileBeatPending    = true;   // tile scramble jump, processed in animate()
+        vignettePulseDecay = 1.0;   // edge pulse spike, decays in animate()
       }
 
       // Drop-triggered photo advance
@@ -1194,7 +1234,14 @@ ctrlChannel.addEventListener('message', (event) => {
         if (!dropMode) schedulePerfAdvance();
       }
       break;
-    case 'dropCooldown':    dropCooldown    = Math.round(value); break;
+    case 'dropCooldown':     dropCooldown     = Math.round(value); break;
+    case 'pulseEnabled':     pulseEnabled     = !!value; break;
+    case 'pulseAmplitude':   pulseAmplitude   = value;   break;
+    case 'wobbleEnabled':    wobbleEnabled    = !!value; break;
+    case 'wobbleFreq':       wobbleFreq       = value;   break;
+    case 'wobbleAmp':        wobbleAmp        = value;   break;
+    case 'breatheEnabled':   breatheEnabled   = !!value; break;
+    case 'breatheAmplitude': breatheAmplitude = value;   break;
     default: console.warn('[chooon-viz] Unknown param:', key);
   }
 

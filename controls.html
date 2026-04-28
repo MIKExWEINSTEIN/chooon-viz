@@ -363,6 +363,49 @@
   </div>
 </section>
 
+<!-- ── Vignette Morph ─────────────────────────────────────────────────────── -->
+<section>
+  <div class="section-title">Vignette Morph</div>
+
+  <!-- Edge Pulse -->
+  <div class="toggle-row">
+    <label class="toggle-label" for="t-pulseEnabled">Edge Pulse</label>
+    <input type="checkbox" id="t-pulseEnabled" />
+  </div>
+  <div class="param-row">
+    <div class="param-label">Amplitude</div>
+    <input type="range" id="s-pulseAmplitude" min="0.0" max="0.3" step="0.01" value="0.1" />
+    <div class="param-value" id="v-pulseAmplitude">0.10</div>
+  </div>
+
+  <!-- Edge Wobble -->
+  <div class="toggle-row">
+    <label class="toggle-label" for="t-wobbleEnabled">Edge Wobble</label>
+    <input type="checkbox" id="t-wobbleEnabled" />
+  </div>
+  <div class="param-row">
+    <div class="param-label">Frequency</div>
+    <input type="range" id="s-wobbleFreq" min="2" max="12" step="1" value="6" />
+    <div class="param-value" id="v-wobbleFreq">6</div>
+  </div>
+  <div class="param-row">
+    <div class="param-label">Amplitude</div>
+    <input type="range" id="s-wobbleAmp" min="0.0" max="0.15" step="0.005" value="0.05" />
+    <div class="param-value" id="v-wobbleAmp">0.050</div>
+  </div>
+
+  <!-- Scale Breathe -->
+  <div class="toggle-row">
+    <label class="toggle-label" for="t-breatheEnabled">Scale Breathe</label>
+    <input type="checkbox" id="t-breatheEnabled" />
+  </div>
+  <div class="param-row">
+    <div class="param-label">Amplitude</div>
+    <input type="range" id="s-breatheAmplitude" min="0.0" max="0.4" step="0.01" value="0.15" />
+    <div class="param-value" id="v-breatheAmplitude">0.15</div>
+  </div>
+</section>
+
 <!-- ── Visual FX ──────────────────────────────────────────────────────────── -->
 <section>
   <div class="section-title">Visual FX</div>
@@ -415,6 +458,9 @@ const PRESETS = {
     tileEnabled: false, tileGrid: 4, tileScramble: 0.02,
     kaleidEnabled: false, kaleidFolds: 4,  kaleidZoom: 1.0,
     perfCycleTime: 120, beatSensitivity: 1.0,
+    pulseEnabled: false,  pulseAmplitude: 0.1,
+    wobbleEnabled: false, wobbleFreq: 6,   wobbleAmp: 0.05,
+    breatheEnabled: true, breatheAmplitude: 0.1,
   },
   pulse: {
     echoDecay: 0.89, echoRotation: 0.002,  echoScale: 0.998,
@@ -422,6 +468,9 @@ const PRESETS = {
     tileEnabled: true,  tileGrid: 4, tileScramble: 0.05,
     kaleidEnabled: false, kaleidFolds: 4,  kaleidZoom: 1.0,
     perfCycleTime: 60,  beatSensitivity: 1.35,
+    pulseEnabled: true,   pulseAmplitude: 0.12,
+    wobbleEnabled: false, wobbleFreq: 6,   wobbleAmp: 0.05,
+    breatheEnabled: true, breatheAmplitude: 0.15,
   },
   storm: {
     echoDecay: 0.94, echoRotation: 0.004,  echoScale: 0.997,
@@ -429,6 +478,9 @@ const PRESETS = {
     tileEnabled: true,  tileGrid: 6, tileScramble: 0.12,
     kaleidEnabled: true,  kaleidFolds: 6,  kaleidZoom: 0.7,
     perfCycleTime: 30,  beatSensitivity: 1.8,
+    pulseEnabled: true,  pulseAmplitude: 0.25,
+    wobbleEnabled: true, wobbleFreq: 8,    wobbleAmp: 0.12,
+    breatheEnabled: true, breatheAmplitude: 0.3,
   },
 };
 
@@ -489,6 +541,10 @@ const sliders = [
   { id: 's-tileScramble',    key: 'tileScramble',     fmt: v => v.toFixed(3)                           },
   { id: 's-kaleidFolds',     key: 'kaleidFolds',      fmt: v => `${Math.round(v)}`                     },
   { id: 's-dropCooldown',    key: 'dropCooldown',     fmt: v => `${Math.round(v)} sec`                 },
+  { id: 's-pulseAmplitude',  key: 'pulseAmplitude',   fmt: v => v.toFixed(2)                           },
+  { id: 's-wobbleFreq',      key: 'wobbleFreq',       fmt: v => `${Math.round(v)}`                     },
+  { id: 's-wobbleAmp',       key: 'wobbleAmp',        fmt: v => v.toFixed(3)                           },
+  { id: 's-breatheAmplitude',key: 'breatheAmplitude', fmt: v => v.toFixed(2)                           },
 ];
 
 sliders.forEach(({ id, key, fmt }) => {
@@ -505,9 +561,12 @@ sliders.forEach(({ id, key, fmt }) => {
 
 // Toggle checkboxes — broadcast boolean
 const toggles = [
-  { id: 't-tileEnabled',   key: 'tileEnabled'   },
-  { id: 't-kaleidEnabled', key: 'kaleidEnabled'  },
-  { id: 't-dropMode',      key: 'dropMode'       },
+  { id: 't-tileEnabled',    key: 'tileEnabled'    },
+  { id: 't-kaleidEnabled',  key: 'kaleidEnabled'  },
+  { id: 't-dropMode',       key: 'dropMode'       },
+  { id: 't-pulseEnabled',   key: 'pulseEnabled'   },
+  { id: 't-wobbleEnabled',  key: 'wobbleEnabled'  },
+  { id: 't-breatheEnabled', key: 'breatheEnabled' },
 ];
 toggles.forEach(({ id, key }) => {
   const cb = document.getElementById(id);
