@@ -347,6 +347,22 @@
   </div>
 </section>
 
+<!-- ── Drop Detection ────────────────────────────────────────────────────── -->
+<section>
+  <div class="section-title">Drop Detection</div>
+
+  <div class="toggle-row">
+    <label class="toggle-label" for="t-dropMode">Drop Mode</label>
+    <input type="checkbox" id="t-dropMode" checked />
+  </div>
+
+  <div class="param-row">
+    <div class="param-label">Drop Cooldown</div>
+    <input type="range" id="s-dropCooldown" min="15" max="120" step="5" value="30" />
+    <div class="param-value" id="v-dropCooldown">30 sec</div>
+  </div>
+</section>
+
 <!-- ── Visual FX ──────────────────────────────────────────────────────────── -->
 <section>
   <div class="section-title">Visual FX</div>
@@ -472,6 +488,7 @@ const sliders = [
   { id: 's-tileGrid',        key: 'tileGrid',         fmt: v => `${Math.round(v)}×${Math.round(v)}`   },
   { id: 's-tileScramble',    key: 'tileScramble',     fmt: v => v.toFixed(3)                           },
   { id: 's-kaleidFolds',     key: 'kaleidFolds',      fmt: v => `${Math.round(v)}`                     },
+  { id: 's-dropCooldown',    key: 'dropCooldown',     fmt: v => `${Math.round(v)} sec`                 },
 ];
 
 sliders.forEach(({ id, key, fmt }) => {
@@ -490,6 +507,7 @@ sliders.forEach(({ id, key, fmt }) => {
 const toggles = [
   { id: 't-tileEnabled',   key: 'tileEnabled'   },
   { id: 't-kaleidEnabled', key: 'kaleidEnabled'  },
+  { id: 't-dropMode',      key: 'dropMode'       },
 ];
 toggles.forEach(({ id, key }) => {
   const cb = document.getElementById(id);

@@ -103,6 +103,7 @@ async def broadcast_loop(analyzer):
                 "volume":        round(float(data.volume), 4),
                 "band_energy":   [round(float(x), 4) for x in data.band_energy],
                 "dominant_freq": round(float(data.dominant_freq), 2),
+                "drop_detected": bool(data.drop_detected),
             })
             dead = set()
             for ws in connected_clients:

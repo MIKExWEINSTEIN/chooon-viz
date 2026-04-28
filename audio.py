@@ -33,6 +33,11 @@ BANDS = [
 # Beat detection – energy history window (# chunks)
 BEAT_HISTORY  = 43   # ~1 s worth at 44100/1024
 
+# Drop detection rolling window constants
+DROP_HISTORY   = 130  # ~3 s at ~43 Hz
+DROP_COOLDOWN  = 86   # ~2 s minimum between detections
+DROP_QUIET_WIN = 43   # ~1 s quiet window to check before surge
+
 # ── module-level WebSocket state ──────────────────────────────────────────────
 _ws_clients: set = set()
 _ws_loop: asyncio.AbstractEventLoop | None = None
@@ -90,15 +95,18 @@ class AudioData:
         "beat_strength",# 0..1 – how strong the beat was
         "volume",       # overall RMS volume  0..1
         "dominant_freq",# Hz of the loudest component
+        "drop_detected",# True if any of the three drop types fired this frame
     )
 
-    def __init__(self, raw_fft, band_energy, beat, beat_strength, volume, dominant_freq):
+    def __init__(self, raw_fft, band_energy, beat, beat_strength, volume, dominant_freq,
+                 drop_detected=False):
         self.raw_fft       = raw_fft
         self.band_energy   = band_energy
         self.beat          = beat
         self.beat_strength = beat_strength
         self.volume        = volume
         self.dominant_freq = dominant_freq
+        self.drop_detected = drop_detected
 
 
 _SILENT = AudioData(
@@ -108,6 +116,7 @@ _SILENT = AudioData(
     beat_strength  = 0.0,
     volume         = 0.0,
     dominant_freq  = 0.0,
+    drop_detected  = False,
 )
 
 
@@ -137,6 +146,14 @@ class AudioAnalyzer:
 
         # Smoothed band energies (prevent flickering)
         self._smooth_energy  = np.zeros(len(BANDS), dtype=np.float64)
+
+        # Drop-detection rolling buffers (~3 s)
+        self._vol_history    = np.zeros(DROP_HISTORY, dtype=np.float64)
+        self._bass_history   = np.zeros(DROP_HISTORY, dtype=np.float64)
+        self._drop_ptr       = 0
+        self._drop_fill      = 0   # frames written so far (caps at DROP_HISTORY)
+        self._drop_cd        = 0   # cooldown frames remaining
+        self._prev_spec_mag  = 0.0
 
     # ── public API ──────────────────────────────────────────────────────────
 
@@ -255,6 +272,59 @@ class AudioAnalyzer:
         dom_idx      = int(np.argmax(spectrum))
         dominant_freq = float(freqs[dom_idx]) if dom_idx < len(freqs) else 0.0
 
+        # ── drop detection ───────────────────────────────────────────────────
+        self._vol_history[self._drop_ptr]  = rms
+        self._bass_history[self._drop_ptr] = bass_energy
+        self._drop_ptr = (self._drop_ptr + 1) % DROP_HISTORY
+        if self._drop_fill < DROP_HISTORY:
+            self._drop_fill += 1
+
+        if self._drop_cd > 0:
+            self._drop_cd -= 1
+
+        drop_detected = False
+        if self._drop_cd == 0 and self._drop_fill >= DROP_QUIET_WIN + 1:
+            n = self._drop_fill
+            # Indices of the last (DROP_QUIET_WIN + 1) frames, oldest → newest
+            idxs = np.array([(self._drop_ptr - 1 - i) % DROP_HISTORY
+                             for i in range(DROP_QUIET_WIN, -1, -1)])
+            win_vol  = self._vol_history[idxs]
+            win_bass = self._bass_history[idxs]
+            cur_vol   = win_vol[-1]
+            quiet_vol = win_vol[:-1]
+            cur_bass  = win_bass[-1]
+            quiet_bass = win_bass[:-1]
+
+            # Long-run averages for dynamic thresholds
+            if n < DROP_HISTORY:
+                vol_avg  = float(self._vol_history[:n].mean())  + 1e-9
+                bass_avg = float(self._bass_history[:n].mean()) + 1e-9
+            else:
+                vol_avg  = float(self._vol_history.mean())  + 1e-9
+                bass_avg = float(self._bass_history.mean()) + 1e-9
+
+            # (a) Classic build-and-drop: quiet vol window → volume surge
+            if cur_vol > vol_avg * 1.5 and float(quiet_vol.mean()) < vol_avg * 0.5:
+                drop_detected = True
+
+            # (b) Bass spike after quiet bass
+            if not drop_detected:
+                if cur_bass > bass_avg * 1.5 and float(quiet_bass.mean()) < bass_avg * 0.3:
+                    drop_detected = True
+
+            # (c) Spectral energy shift > 50% frame to frame
+            if not drop_detected:
+                cur_spec_mag = float(spectrum.sum())
+                if self._prev_spec_mag > 1e-6:
+                    shift = abs(cur_spec_mag - self._prev_spec_mag) / self._prev_spec_mag
+                    if shift > 0.5:
+                        drop_detected = True
+
+            if drop_detected:
+                self._drop_cd = DROP_COOLDOWN
+
+        self._prev_spec_mag = float(spectrum.sum())
+
         result = AudioData(
             raw_fft        = norm_fft,
             band_energy    = band_energy,
@@ -262,6 +332,7 @@ class AudioAnalyzer:
             beat_strength  = beat_strength,
             volume         = float(volume),
             dominant_freq  = dominant_freq,
+            drop_detected  = drop_detected,
         )
 
         # ── WebSocket broadcast ──────────────────────────────────────────────

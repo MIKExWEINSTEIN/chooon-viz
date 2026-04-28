@@ -105,6 +105,13 @@
     #btn-lock:hover { background: #35a04d; }
     #btn-skip { background: rgba(255,255,255,0.1); color: rgba(255,255,255,0.65); }
     #btn-skip:hover { background: rgba(255,255,255,0.18); }
+    #setup-controls label {
+      font-family: monospace; font-size: 11px;
+      color: rgba(255,255,255,0.55);
+      display: flex; align-items: center; gap: 5px;
+      cursor: pointer; user-select: none;
+    }
+    #setup-controls label:hover { color: rgba(255,255,255,0.85); }
 
     /* ── Queue popover ── */
     #queue-popover {
@@ -152,7 +159,8 @@
 <div id="v-edge-handle"   class="hidden"></div>
 <div id="setup-controls"  class="hidden">
   <button id="btn-skip">Skip</button>
-  <button id="btn-lock">Lock Vignette</button>
+  <label><input type="checkbox" id="cb-vignette" checked> Vignette</label>
+  <button id="btn-lock">Lock</button>
 </div>
 <div id="queue-popover" class="hidden"></div>
 
@@ -313,6 +321,7 @@ const fragmentShader = /* glsl */`
   uniform float uVignetteAspect;  // imgW / imgH  (photo shape)
   uniform float uVignetteScale;   // overall size — larger = smaller ellipse
   uniform float uEllipseRatio;    // user h:w adjustment (default 1.0)
+  uniform bool  uVignetteEnabled; // when false, skip all vignette math
   uniform float uBeatStrength;    // 0-1, drives chromatic aberration (with decay)
   uniform float uBeatFlash;       // 0-1, brief brightness spike on each beat
   uniform float uTime;            // seconds, drives film-grain animation
@@ -332,16 +341,21 @@ const fragmentShader = /* glsl */`
     float b   = texture2D(uTexture, vUv + vec2(ab, 0.0)).b;
     vec4 texColor = vec4(r, g, b, texture2D(uTexture, vUv).a);
 
-    // ── Elliptical vignette ──────────────────────────────────────────────────
-    vec2  d        = vUv - uVignetteCenter;
-    float vDist    = length(vec2(d.x / (uVignetteAspect * uEllipseRatio), d.y))
-                       * uVignetteScale * 2.0;
-    float vignette = 1.0 - smoothstep(0.35, 1.05, vDist);
-    texColor.rgb  *= vignette;
+    float grain = hash(vUv * 800.0 + vec2(uTime * 7.3, uTime * 11.7)) - 0.5;
 
-    // ── Film grain (analog texture, follows vignette so edges stay black) ───
-    float grain    = hash(vUv * 800.0 + vec2(uTime * 7.3, uTime * 11.7)) - 0.5;
-    texColor.rgb  += grain * 0.04 * vignette;
+    if (uVignetteEnabled) {
+      // ── Elliptical vignette ────────────────────────────────────────────────
+      vec2  d        = vUv - uVignetteCenter;
+      float vDist    = length(vec2(d.x / (uVignetteAspect * uEllipseRatio), d.y))
+                         * uVignetteScale * 2.0;
+      float vignette = 1.0 - smoothstep(0.35, 1.05, vDist);
+      texColor.rgb  *= vignette;
+      // Film grain follows vignette mask so edges stay black
+      texColor.rgb  += grain * 0.04 * vignette;
+    } else {
+      // No vignette: full image, grain applied uniformly
+      texColor.rgb  += grain * 0.04;
+    }
 
     // ── Beat flash ───────────────────────────────────────────────────────────
     texColor.rgb  *= (1.0 + uBeatFlash);
@@ -365,9 +379,13 @@ let photoMesh        = null;
 let vignetteCenter   = { x: 0.5, y: 0.5 };
 let vignetteScale    = 1.0;
 let ellipseRatio     = 1.0;   // user-adjustable width:height multiplier
+let vignetteEnabled  = true;  // per-photo vignette toggle
 
-let perfTimer        = null;
-let   perfInterval   = 45000;   // ms, updated via BroadcastChannel
+let perfTimer           = null;
+let perfInterval        = 45000;   // ms, updated via BroadcastChannel
+let dropMode            = true;    // true = drop-triggered advance, false = timer
+let dropCooldown        = 30;      // seconds min between drop-triggered advances
+let lastPhotoChangeTime = 0;       // Date.now() at last performance photo advance
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Audio state — updated by WebSocket, consumed by animate()
@@ -623,16 +641,17 @@ function loadPhotoToMesh(file) {
         const aspect = img.naturalWidth / img.naturalHeight;
         const mat = new THREE.ShaderMaterial({
           uniforms: {
-            uTexture:        { value: texture },
-            uVignetteCenter: { value: new THREE.Vector2(vignetteCenter.x, vignetteCenter.y) },
-            uVignetteAspect: { value: aspect },
-            uVignetteScale:  { value: vignetteScale },
-            uEllipseRatio:   { value: ellipseRatio },
+            uTexture:         { value: texture },
+            uVignetteCenter:  { value: new THREE.Vector2(vignetteCenter.x, vignetteCenter.y) },
+            uVignetteAspect:  { value: aspect },
+            uVignetteScale:   { value: vignetteScale },
+            uEllipseRatio:    { value: ellipseRatio },
+            uVignetteEnabled: { value: vignetteEnabled },
             // Audio-reactive uniforms (driven by animate() each frame)
-            uBass:           { value: 0 },
-            uBeatStrength:   { value: 0 },
-            uBeatFlash:      { value: 0 },
-            uTime:           { value: shaderTime },
+            uBass:            { value: 0 },
+            uBeatStrength:    { value: 0 },
+            uBeatFlash:       { value: 0 },
+            uTime:            { value: shaderTime },
           },
           vertexShader,
           fragmentShader,
@@ -664,8 +683,9 @@ function updateShaderUniforms() {
   if (!photoMesh) return;
   const u = photoMesh.material.uniforms;
   u.uVignetteCenter.value.set(vignetteCenter.x, vignetteCenter.y);
-  u.uVignetteScale.value  = vignetteScale;
-  u.uEllipseRatio.value   = ellipseRatio;
+  u.uVignetteScale.value    = vignetteScale;
+  u.uEllipseRatio.value     = ellipseRatio;
+  u.uVignetteEnabled.value  = vignetteEnabled;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -823,10 +843,11 @@ async function saveSettings() {
 
 function initVignetteForPhoto(filename) {
   const s = photoSettings[filename];
-  vignetteCenter.x = s?.cx          ?? 0.5;
-  vignetteCenter.y = s?.cy          ?? 0.5;
-  vignetteScale    = s?.scale       ?? 1.0;
-  ellipseRatio     = s?.ellipseRatio ?? 1.0;
+  vignetteCenter.x = s?.cx             ?? 0.5;
+  vignetteCenter.y = s?.cy             ?? 0.5;
+  vignetteScale    = s?.scale          ?? 0.55;
+  ellipseRatio     = s?.ellipseRatio   ?? 1.0;
+  vignetteEnabled  = s?.vignetteEnabled ?? true;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -883,9 +904,16 @@ document.addEventListener('click', (e) => {
 const setupControlsEl = document.getElementById('setup-controls');
 
 function showAdjustUI() {
-  handleEl.classList.remove('hidden');
-  edgeHandleEl.classList.remove('hidden');
   setupControlsEl.classList.remove('hidden');
+  const vigCb = document.getElementById('cb-vignette');
+  if (vigCb) vigCb.checked = vignetteEnabled;
+  if (vignetteEnabled) {
+    handleEl.classList.remove('hidden');
+    edgeHandleEl.classList.remove('hidden');
+  } else {
+    handleEl.classList.add('hidden');
+    edgeHandleEl.classList.add('hidden');
+  }
   updateAllHandles();
 }
 
@@ -924,12 +952,12 @@ async function showNextSetup() {
 document.getElementById('btn-lock').addEventListener('click', async () => {
   if (!photoMesh) return;
   const filename = queue[currentPhotoIdx].name;
-  // Save all four vignette parameters
   photoSettings[filename] = {
-    cx:          vignetteCenter.x,
-    cy:          vignetteCenter.y,
-    scale:       vignetteScale,
-    ellipseRatio: ellipseRatio,
+    cx:              vignetteCenter.x,
+    cy:              vignetteCenter.y,
+    scale:           vignetteScale,
+    ellipseRatio:    ellipseRatio,
+    vignetteEnabled: vignetteEnabled,
   };
   await saveSettings();
 
@@ -950,11 +978,26 @@ document.getElementById('btn-skip').addEventListener('click', async () => {
   await showNextSetup();
 });
 
+document.getElementById('cb-vignette').addEventListener('change', (e) => {
+  vignetteEnabled = e.target.checked;
+  updateShaderUniforms();
+  if (vignetteEnabled) {
+    handleEl.classList.remove('hidden');
+    edgeHandleEl.classList.remove('hidden');
+    updateAllHandles();
+  } else {
+    handleEl.classList.add('hidden');
+    edgeHandleEl.classList.add('hidden');
+    clearEllipseOutline();
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // Performance mode
 // ═══════════════════════════════════════════════════════════════════════════════
 async function showPerfPhoto(idx) {
   currentPhotoIdx = idx;
+  lastPhotoChangeTime = Date.now();
   const file = queue[idx];
   initVignetteForPhoto(file.name);
   await loadPhotoToMesh(file);
@@ -975,8 +1018,12 @@ async function startPerformance(startIdx = 0) {
   appMode = 'performance';
   hideAdjustUI();
   await showPerfPhoto(startIdx);
-  schedulePerfAdvance();
-  console.log('[chooon-viz] Performance mode — cycling every', perfInterval / 1000, 's');
+  if (!dropMode) {
+    schedulePerfAdvance();
+    console.log('[chooon-viz] Performance mode — timer cycling every', perfInterval / 1000, 's');
+  } else {
+    console.log('[chooon-viz] Performance mode — drop-triggered cycling, cooldown', dropCooldown, 's');
+  }
 }
 
 async function enterAdjustFromPerf(idx) {
@@ -1085,12 +1132,21 @@ function connect() {
       audioData.volume       = data.volume;
       audioData.bandEnergy   = data.band_energy;
       audioData.dominantFreq = data.dominant_freq;
+      audioData.dropDetected = data.drop_detected ?? false;
 
       // Spike decaying values on each detected beat — beatSensitivity scales magnitude
       if (data.beat) {
         beatFlash         = Math.min(0.6, 0.3 * beatSensitivity);
         beatStrengthDecay = Math.max(beatStrengthDecay, data.beat_strength * beatSensitivity);
         tileBeatPending   = true;   // tile scramble jump, processed in animate()
+      }
+
+      // Drop-triggered photo advance
+      if (data.drop_detected && dropMode && appMode === 'performance') {
+        const now = Date.now();
+        if (now - lastPhotoChangeTime > dropCooldown * 1000) {
+          showPerfPhoto((currentPhotoIdx + 1) % queue.length);
+        }
       }
     } catch (err) {
       console.warn('[chooon-viz] Failed to parse message:', event.data);
@@ -1131,6 +1187,14 @@ ctrlChannel.addEventListener('message', (event) => {
     case 'tileScramble':    tileScramble    = value; break;
     case 'kaleidEnabled':   kaleidEnabled   = !!value; break;
     case 'kaleidFolds':     kaleidFolds     = Math.max(2, Math.min(8, Math.round(value))); break;
+    case 'dropMode':
+      dropMode = !!value;
+      if (appMode === 'performance') {
+        if (perfTimer) { clearTimeout(perfTimer); perfTimer = null; }
+        if (!dropMode) schedulePerfAdvance();
+      }
+      break;
+    case 'dropCooldown':    dropCooldown    = Math.round(value); break;
     default: console.warn('[chooon-viz] Unknown param:', key);
   }
 
