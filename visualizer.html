@@ -160,6 +160,7 @@
 <div id="setup-controls"  class="hidden">
   <button id="btn-skip">Skip</button>
   <label><input type="checkbox" id="cb-vignette" checked> Vignette</label>
+  <label><input type="checkbox" id="cb-drift"> Drift</label>
   <button id="btn-lock">Lock</button>
 </div>
 <div id="queue-popover" class="hidden"></div>
@@ -342,6 +343,9 @@ const fragmentShader = /* glsl */`
   uniform float uWobbleAmp;       // wobble displacement (0 = disabled)
   uniform float uBreath;          // breathe envelope value (−1..1 sine)
   uniform float uBreatheAmount;   // breathe amplitude multiplier (0 = disabled)
+  // Vignette drift
+  uniform bool  uDriftEnabled;    // per-photo Lissajous drift on/off
+  uniform float uDriftSpeed;      // drift tempo multiplier (0.02–0.5)
 
   varying vec2 vUv;
 
@@ -362,7 +366,13 @@ const fragmentShader = /* glsl */`
 
     if (uVignetteEnabled) {
       // ── Elliptical vignette with morph effects ─────────────────────────────
-      vec2  d        = vUv - uVignetteCenter;
+      // Lissajous drift: irrational frequency ratio (0.7 / 1.1) avoids repeat
+      vec2 center = uVignetteCenter;
+      if (uDriftEnabled) {
+        center.x += sin(uTime * uDriftSpeed * 0.7) * 0.1;
+        center.y += sin(uTime * uDriftSpeed * 1.1) * 0.1;
+      }
+      vec2  d        = vUv - center;
       float angle    = atan(d.y, d.x);
       // Effective scale: base + edge-pulse addend + breathe oscillation
       float effScale = uVignetteScale + uPulseAmount + uBreath * uBreatheAmount;
@@ -401,7 +411,9 @@ let photoMesh        = null;
 let vignetteCenter   = { x: 0.5, y: 0.5 };
 let vignetteScale    = 1.0;
 let ellipseRatio     = 1.0;   // user-adjustable width:height multiplier
-let vignetteEnabled  = true;  // per-photo vignette toggle
+let vignetteEnabled  = true;   // per-photo vignette toggle
+let driftEnabled     = false;  // per-photo Lissajous drift
+let driftSpeed       = 0.1;   // global drift tempo (updated by slider / per-photo load)
 
 let perfTimer           = null;
 let perfInterval        = 45000;   // ms, updated via BroadcastChannel
@@ -691,6 +703,9 @@ function loadPhotoToMesh(file) {
             uWobbleAmp:       { value: 0 },
             uBreath:          { value: 0 },
             uBreatheAmount:   { value: 0 },
+            // Vignette drift uniforms
+            uDriftEnabled:    { value: driftEnabled },
+            uDriftSpeed:      { value: driftSpeed },
           },
           vertexShader,
           fragmentShader,
@@ -725,6 +740,8 @@ function updateShaderUniforms() {
   u.uVignetteScale.value    = vignetteScale;
   u.uEllipseRatio.value     = ellipseRatio;
   u.uVignetteEnabled.value  = vignetteEnabled;
+  u.uDriftEnabled.value     = driftEnabled;
+  u.uDriftSpeed.value       = driftSpeed;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -887,6 +904,8 @@ function initVignetteForPhoto(filename) {
   vignetteScale    = s?.scale          ?? 0.55;
   ellipseRatio     = s?.ellipseRatio   ?? 1.0;
   vignetteEnabled  = s?.vignetteEnabled ?? true;
+  driftEnabled     = s?.driftEnabled    ?? false;
+  driftSpeed       = s?.driftSpeed      ?? 0.1;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -944,8 +963,10 @@ const setupControlsEl = document.getElementById('setup-controls');
 
 function showAdjustUI() {
   setupControlsEl.classList.remove('hidden');
-  const vigCb = document.getElementById('cb-vignette');
-  if (vigCb) vigCb.checked = vignetteEnabled;
+  const vigCb   = document.getElementById('cb-vignette');
+  const driftCb = document.getElementById('cb-drift');
+  if (vigCb)   vigCb.checked   = vignetteEnabled;
+  if (driftCb) driftCb.checked = driftEnabled;
   if (vignetteEnabled) {
     handleEl.classList.remove('hidden');
     edgeHandleEl.classList.remove('hidden');
@@ -997,6 +1018,8 @@ document.getElementById('btn-lock').addEventListener('click', async () => {
     scale:           vignetteScale,
     ellipseRatio:    ellipseRatio,
     vignetteEnabled: vignetteEnabled,
+    driftEnabled:    driftEnabled,
+    driftSpeed:      driftSpeed,
   };
   await saveSettings();
 
@@ -1029,6 +1052,11 @@ document.getElementById('cb-vignette').addEventListener('change', (e) => {
     edgeHandleEl.classList.add('hidden');
     clearEllipseOutline();
   }
+});
+
+document.getElementById('cb-drift').addEventListener('change', (e) => {
+  driftEnabled = e.target.checked;
+  updateShaderUniforms();
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1242,6 +1270,16 @@ ctrlChannel.addEventListener('message', (event) => {
     case 'wobbleAmp':        wobbleAmp        = value;   break;
     case 'breatheEnabled':   breatheEnabled   = !!value; break;
     case 'breatheAmplitude': breatheAmplitude = value;   break;
+    case 'driftEnabled':
+      driftEnabled = !!value;
+      const driftCbEl = document.getElementById('cb-drift');
+      if (driftCbEl) driftCbEl.checked = driftEnabled;
+      updateShaderUniforms();
+      break;
+    case 'driftSpeed':
+      driftSpeed = value;
+      if (photoMesh) photoMesh.material.uniforms.uDriftSpeed.value = driftSpeed;
+      break;
     default: console.warn('[chooon-viz] Unknown param:', key);
   }
 

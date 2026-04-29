@@ -406,6 +406,22 @@
   </div>
 </section>
 
+<!-- ── Vignette Drift ─────────────────────────────────────────────────────── -->
+<section>
+  <div class="section-title">Vignette Drift</div>
+
+  <div class="toggle-row">
+    <label class="toggle-label" for="t-driftEnabled">Enable Drift</label>
+    <input type="checkbox" id="t-driftEnabled" />
+  </div>
+
+  <div class="param-row">
+    <div class="param-label">Drift Speed</div>
+    <input type="range" id="s-driftSpeed" min="0.02" max="0.5" step="0.01" value="0.1" />
+    <div class="param-value" id="v-driftSpeed">0.10</div>
+  </div>
+</section>
+
 <!-- ── Visual FX ──────────────────────────────────────────────────────────── -->
 <section>
   <div class="section-title">Visual FX</div>
@@ -461,6 +477,7 @@ const PRESETS = {
     pulseEnabled: false,  pulseAmplitude: 0.1,
     wobbleEnabled: false, wobbleFreq: 6,   wobbleAmp: 0.05,
     breatheEnabled: true, breatheAmplitude: 0.1,
+    driftEnabled: true,  driftSpeed: 0.1,
   },
   pulse: {
     echoDecay: 0.89, echoRotation: 0.002,  echoScale: 0.998,
@@ -471,6 +488,7 @@ const PRESETS = {
     pulseEnabled: true,   pulseAmplitude: 0.12,
     wobbleEnabled: false, wobbleFreq: 6,   wobbleAmp: 0.05,
     breatheEnabled: true, breatheAmplitude: 0.15,
+    driftEnabled: false, driftSpeed: 0.1,
   },
   storm: {
     echoDecay: 0.94, echoRotation: 0.004,  echoScale: 0.997,
@@ -481,6 +499,7 @@ const PRESETS = {
     pulseEnabled: true,  pulseAmplitude: 0.25,
     wobbleEnabled: true, wobbleFreq: 8,    wobbleAmp: 0.12,
     breatheEnabled: true, breatheAmplitude: 0.3,
+    driftEnabled: true,  driftSpeed: 0.25,
   },
 };
 
@@ -545,6 +564,7 @@ const sliders = [
   { id: 's-wobbleFreq',      key: 'wobbleFreq',       fmt: v => `${Math.round(v)}`                     },
   { id: 's-wobbleAmp',       key: 'wobbleAmp',        fmt: v => v.toFixed(3)                           },
   { id: 's-breatheAmplitude',key: 'breatheAmplitude', fmt: v => v.toFixed(2)                           },
+  { id: 's-driftSpeed',      key: 'driftSpeed',       fmt: v => v.toFixed(2)                           },
 ];
 
 sliders.forEach(({ id, key, fmt }) => {
@@ -567,6 +587,7 @@ const toggles = [
   { id: 't-pulseEnabled',   key: 'pulseEnabled'   },
   { id: 't-wobbleEnabled',  key: 'wobbleEnabled'  },
   { id: 't-breatheEnabled', key: 'breatheEnabled' },
+  { id: 't-driftEnabled',   key: 'driftEnabled'   },
 ];
 toggles.forEach(({ id, key }) => {
   const cb = document.getElementById(id);
