@@ -66,3 +66,47 @@ A Presets section was added to controls.html — three pill-shaped buttons (Drif
 
 The JS was restructured around two lookup maps — sliderMap (key → {slider, valEl, fmt}) and toggleMap (key → checkbox) — built inside the existing sliders.forEach and toggles.forEach loops. A PRESETS object holds all 12 parameter values per preset (including kaleidZoom which broadcasts but has no current UI element). applyPreset(name) iterates the preset's entries, updates the corresponding UI element via the map, and broadcasts each param individually; it then sets btn.className = 'preset-btn active-{name}' on the active button. clearPreset() strips all active classes and is called on every manual slider input or checkbox change event, so the highlight disappears as soon as the user overrides a preset value.
 
+Session 10 summary:
+
+start.sh is the main launcher — it clears ports 8765 and 8080 with lsof -ti | xargs kill -9, checks that .venv/ exists (and prints setup instructions if not), starts audio_server.py in the background while capturing its PID, installs a trap on INT/TERM so Ctrl+C kills the server and clears both ports cleanly, waits 2 seconds and verifies the process is still alive, then opens both HTML pages in Chrome via open -a "Google Chrome". After printing a status banner it calls wait $SERVER_PID, which keeps the script alive and lets the server's own log output stream directly to the terminal.
+
+stop.sh is a simple standalone kill script that clears both ports with the same lsof/kill pattern — safe to run any time, even if nothing is running. Both scripts use SCRIPT_DIR (resolved via ${BASH_SOURCE[0]}) so they work regardless of the current working directory.
+
+Summary 11a summary:
+
+Drop Detector (audio.py / audio_server.py):
+
+AudioData gains a drop_detected slot
+AudioAnalyzer maintains ~3s rolling circular buffers for volume and bass (_vol_history, _bass_history), a previous-spectrum-magnitude scalar, and a ~2s cooldown counter
+Three types detected with a single pass each frame, short-circuit OR'd:
+(a) Last ~1s (43 frames) quiet below 50% of long-run vol average → current frame surges >150%
+(b) Bass equivalent — last ~1s below 30% bass average → current bass >150%
+(c) Total spectrum magnitude shifts >50% from the previous frame
+drop_detected added to the WebSocket broadcast JSON
+visualizer.html:
+
+dropMode = true / dropCooldown = 30 / lastPhotoChangeTime = 0 state vars added
+WS handler triggers showPerfPhoto(nextIdx) when drop arrives, mode is active, and cooldown has elapsed; showPerfPhoto stamps lastPhotoChangeTime on every advance
+startPerformance skips schedulePerfAdvance() when dropMode=true; BroadcastChannel dropMode case restarts/cancels the timer live
+Vignette toggle: cb-vignette checkbox in setup-controls; vignetteEnabled state + uVignetteEnabled bool uniform in fragment shader wraps all vignette/grain-mask math; handles hide when vignette disabled; saved in photo_settings.json
+Default scale for unsaved photos: 0.55 (was 1.0)
+controls.html:
+
+New "Drop Detection" section: Drop Mode toggle (default on) + Drop Cooldown slider (15–120s, default 30s); wired into sliders and toggles arrays
+
+Session 11b summary:
+
+Three independently-toggleable vignette morph effects were added, all stacking:
+
+Edge Pulse — vignettePulseDecay JS variable spikes to 1.0 in the WebSocket beat handler alongside existing beatFlash/beatStrengthDecay, then decays at 3.0/s in animate(). Each frame uPulseAmount = pulseEnabled ? vignettePulseDecay * pulseAmplitude : 0 is pushed to the shader, adding to effScale so the vignette ring snaps outward on every beat.
+Edge Wobble — In the fragment shader, after computing the vector d = vUv - uVignetteCenter, angle = atan(d.y, d.x) is used to add sin(angle * uWobbleFreq + uTime * 2.0) * uWobbleAmp directly to the vignette distance field, rippling the ellipse perimeter; uWobbleAmp is zeroed when disabled.
+Scale Breathe — breathEnvelope = Math.sin(shaderTime * 1.2) oscillates −1..1 each frame; uBreath * uBreatheAmount (amplitude zeroed when disabled) is added to effScale in the shader alongside the pulse addend.
+Controls.html gained a "Vignette Morph" section with toggle + amplitude for each effect (plus frequency/amplitude sliders for wobble), all wired through sliders/toggles arrays and BroadcastChannel. The three presets were updated: Drift uses breathe-only (0.1), Pulse adds edge pulse (0.12) + breathe (0.15), Storm uses all three at higher values (pulse 0.25, wobble freq 8 amp 0.12, breathe 0.3).
+
+Session 12 summary:
+
+Two new GLSL uniforms — uniform bool uDriftEnabled and uniform float uDriftSpeed — were added to the fragment shader. When uDriftEnabled is true, the vignette center is offset by a Lissajous path computed entirely in GLSL: center.x += sin(uTime * uDriftSpeed * 0.7) * 0.1 and center.y += sin(uTime * uDriftSpeed * 1.1) * 0.1, with the irrational ratio 0.7/1.1 ensuring the path never exactly repeats and the fixed 0.1 UV amplitude keeping the drift within a 0.2 UV diameter circle around the base center.
+
+Per-photo persistence: driftEnabled (default false) and driftSpeed (default 0.1) are loaded in initVignetteForPhoto from photo_settings.json and written back in the Lock handler alongside the existing vignette params. A "Drift" checkbox (cb-drift) was added to #setup-controls next to the "Vignette" checkbox; showAdjustUI syncs it and its change handler calls updateShaderUniforms().
+
+Global runtime control: controls.html gained a "Vignette Drift" section with an "Enable Drift" toggle and a "Drift Speed" slider (0.02–0.5, default 0.1). The BroadcastChannel driftEnabled case updates the JS state, syncs the setup checkbox, and calls updateShaderUniforms(); driftSpeed directly patches photoMesh.material.uniforms.uDriftSpeed.value. The Drift preset enables drift at speed 0.1, Pulse leaves it off, Storm enables it at speed 0.25.
