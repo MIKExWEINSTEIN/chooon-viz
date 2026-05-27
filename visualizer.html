@@ -206,6 +206,83 @@ function animate(ts = 0) {
   vignettePulseDecay = Math.max(0, vignettePulseDecay - dt * 3.0);
   breathEnvelope     = Math.sin(shaderTime * 1.2);   // ~1.2 rad/s breathing cycle
 
+  // ── Autonomous mood system ─────────────────────────────────────────────────
+  {
+    // Mood: weighted blend of volume, beat_strength, and average spectral energy
+    const avgSpec = audioData.bandEnergy.reduce((s, v) => s + v, 0) / 6;
+    const moodRaw = 0.3 * audioData.volume + 0.4 * audioData.beatStrength + 0.3 * avgSpec;
+    moodValue += Math.min(1, dt / 3.0) * (moodRaw - moodValue);  // τ = 3 s EMA
+
+    // Saturation: count of active visual components using current effective params
+    let activeCnt = 0;
+    if (kaleidEnabled && kaleidZoom < 0.9)      activeCnt++;
+    if (wobbleAmp > 0.05)                        activeCnt++;
+    if (pulseEnabled)                            activeCnt++;
+    if (driftEnabled && driftSpeed > 0.1)       activeCnt++;
+    if (tileEnabled)                             activeCnt++;
+    saturationValue += Math.min(1, dt / 1.0) * (activeCnt / 5 - saturationValue);  // τ = 1 s
+    undersaturatedFlag = saturationValue < 0.3 && moodValue > 0.6;
+
+    if (autonomousMode) {
+      const m = moodValue;
+
+      // ── Parameter curves ──────────────────────────────────────────────────
+      kaleidEnabled    = true;
+      kaleidZoom       = 1.0 - m * 0.5;              // 1.0 → 0.5
+      const rotSpeed   = m * 0.3;                     // 0 → 0.3 rad/s
+      kaleidRotationAngle += dt * rotSpeed * kaleidDirection;
+      if (tileBeatPending) kaleidRotationAngle += m * 1.5 * kaleidDirection;
+
+      pulseEnabled     = m >= 0.4;
+      pulseAmplitude   = m * 0.25;
+      wobbleEnabled    = m >= 0.3;
+      wobbleAmp        = m * 0.1;
+      wobbleFreq       = 6;
+      breatheEnabled   = true;
+      breatheAmplitude = 0.1 + m * 0.15;             // 0.10 → 0.25
+      driftEnabled     = true;
+      driftSize        = 0.08 + m * 0.17;            // 0.08 → 0.25
+      driftSpeed       = 0.05 + m * 0.15;            // 0.05 → 0.20
+      tileEnabled      = m > 0.75 && undersaturatedFlag;
+      tileScramble     = m * 0.08;
+      effectIntensity  = 0.6 + m * 1.2;              // 0.60 → 1.80
+
+      // ── Saturation boost ─────────────────────────────────────────────────
+      if (undersaturatedFlag && boostFrames <= 0) boostFrames = 5;
+      if (boostFrames > 0) {
+        wobbleAmp      = Math.min(0.15, wobbleAmp      + 0.05);
+        pulseAmplitude = Math.min(0.30, pulseAmplitude + 0.05);
+        driftSpeed     = Math.min(0.25, driftSpeed     + 0.05);
+        boostFrames--;
+      }
+
+      // ── Direction flip on mood threshold crossings ────────────────────────
+      if (!kaleidFlippedThisPhoto) {
+        for (const thresh of [0.4, 0.7]) {
+          if (moodValue >= thresh && prevMoodValue < thresh) {
+            kaleidDirection        = -kaleidDirection;
+            kaleidFlippedThisPhoto = true;
+            break;
+          }
+        }
+      }
+    }
+    prevMoodValue = moodValue;
+
+    // Always sync kaleid uniforms (handles both manual zoom and autonomous rotation)
+    kaleidMat.uniforms.uKaleidZoom.value     = kaleidZoom;
+    kaleidMat.uniforms.uKaleidRotation.value = kaleidRotationAngle;
+
+    // Throttled mood broadcast to controls.html (~5 fps)
+    if (autonomousMode) {
+      const now = Date.now();
+      if (now - lastMoodBroadcast > 200) {
+        lastMoodBroadcast = now;
+        ctrlChannel.postMessage({ type: 'mood_status', mood: moodValue, saturation: saturationValue });
+      }
+    }
+  }
+
   if (photoMesh) {
     const u = photoMesh.material.uniforms;
 
@@ -221,6 +298,12 @@ function animate(ts = 0) {
     u.uWobbleAmp.value     = wobbleEnabled  ? wobbleAmp                           : 0;
     u.uBreath.value        = breathEnvelope;
     u.uBreatheAmount.value = breatheEnabled ? breatheAmplitude                    : 0;
+
+    // Drift uniforms updated per-frame (autonomous mode varies these each frame)
+    u.uDriftEnabled.value = driftEnabled;
+    u.uDriftSpeed.value   = driftSpeed;
+    u.uDriftSize.value    = driftSize;
+    u.uFreqRatio.value    = freqRatio;
 
     // Exponential-style linear decay toward zero
     beatFlash         = Math.max(0, beatFlash         - dt / BEAT_FLASH_DECAY);
@@ -346,6 +429,8 @@ const fragmentShader = /* glsl */`
   // Vignette drift
   uniform bool  uDriftEnabled;    // per-photo Lissajous drift on/off
   uniform float uDriftSpeed;      // drift tempo multiplier (0.02–0.5)
+  uniform float uDriftSize;       // drift amplitude in UV units (0–0.25)
+  uniform float uFreqRatio;       // x-axis frequency multiplier for figure-8 shape
 
   varying vec2 vUv;
 
@@ -369,8 +454,8 @@ const fragmentShader = /* glsl */`
       // Lissajous drift: irrational frequency ratio (0.7 / 1.1) avoids repeat
       vec2 center = uVignetteCenter;
       if (uDriftEnabled) {
-        center.x += sin(uTime * uDriftSpeed * 0.7) * 0.1;
-        center.y += sin(uTime * uDriftSpeed * 1.1) * 0.1;
+        center.x += sin(uTime * uDriftSpeed * uFreqRatio) * uDriftSize;
+        center.y += sin(uTime * uDriftSpeed) * uDriftSize;
       }
       vec2  d        = vUv - center;
       float angle    = atan(d.y, d.x);
@@ -414,6 +499,23 @@ let ellipseRatio     = 1.0;   // user-adjustable width:height multiplier
 let vignetteEnabled  = true;   // per-photo vignette toggle
 let driftEnabled     = false;  // per-photo Lissajous drift
 let driftSpeed       = 0.1;   // global drift tempo (updated by slider / per-photo load)
+let driftSize        = 0.1;   // figure-8 amplitude (0.08–0.25 in autonomous mode)
+let freqRatio        = 1.5;   // figure-8 x-frequency multiplier (1.5–1.6)
+
+// Autonomous mood system
+let autonomousMode     = false;
+let moodValue          = 0;    // EMA-smoothed mood (0–1, τ≈3s)
+let prevMoodValue      = 0;    // previous frame's mood for threshold crossing detection
+let saturationValue    = 0;    // EMA-smoothed visual saturation (0–1, τ≈1s)
+let undersaturatedFlag = false;
+let boostFrames        = 0;    // countdown for saturation boost (5 frames)
+let lastMoodBroadcast  = 0;    // Date.now() at last mood_status broadcast
+
+// Kaleid autonomous state
+let kaleidZoom             = 1.0;   // 0.5–1.0, set by mood or BroadcastChannel
+let kaleidRotationAngle    = 0;     // accumulated rotation (radians)
+let kaleidDirection        = 1;     // +1 CW, −1 CCW
+let kaleidFlippedThisPhoto = false; // true once direction flips per photo
 
 let perfTimer           = null;
 let perfInterval        = 45000;   // ms, updated via BroadcastChannel
@@ -588,6 +690,8 @@ const rtKaleid = new THREE.WebGLRenderTarget(window.innerWidth, window.innerHeig
 const kaleidFragShader = /* glsl */`
   uniform sampler2D uTex;
   uniform int       uKaleidFolds;
+  uniform float     uKaleidZoom;      // 0.5–1.0, smaller = zoomed in
+  uniform float     uKaleidRotation;  // accumulated rotation (radians)
 
   varying vec2 vUv;
 
@@ -595,6 +699,11 @@ const kaleidFragShader = /* glsl */`
 
   void main() {
     vec2  d  = vUv - 0.5;
+    // Rotate before folding
+    float ca = cos(uKaleidRotation), sa = sin(uKaleidRotation);
+    d = vec2(d.x * ca - d.y * sa, d.x * sa + d.y * ca);
+    // Zoom — divide maps to larger r for same UV, creating zoom-in
+    d /= uKaleidZoom;
     float r  = length(d);
     float a  = atan(d.y, d.x);              // [-PI, PI]
     a = mod(a + 2.0 * PI, 2.0 * PI);        // remap to [0, 2PI]
@@ -613,8 +722,10 @@ const kaleidCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 const kaleidScene  = new THREE.Scene();
 const kaleidMat    = new THREE.ShaderMaterial({
   uniforms: {
-    uTex:         { value: null },
-    uKaleidFolds: { value: kaleidFolds },
+    uTex:             { value: null },
+    uKaleidFolds:     { value: kaleidFolds },
+    uKaleidZoom:      { value: 1.0 },
+    uKaleidRotation:  { value: 0.0 },
   },
   vertexShader:   `varying vec2 vUv; void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
   fragmentShader: kaleidFragShader,
@@ -706,6 +817,8 @@ function loadPhotoToMesh(file) {
             // Vignette drift uniforms
             uDriftEnabled:    { value: driftEnabled },
             uDriftSpeed:      { value: driftSpeed },
+            uDriftSize:       { value: driftSize },
+            uFreqRatio:       { value: freqRatio },
           },
           vertexShader,
           fragmentShader,
@@ -742,6 +855,8 @@ function updateShaderUniforms() {
   u.uVignetteEnabled.value  = vignetteEnabled;
   u.uDriftEnabled.value     = driftEnabled;
   u.uDriftSpeed.value       = driftSpeed;
+  u.uDriftSize.value        = driftSize;
+  u.uFreqRatio.value        = freqRatio;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1065,6 +1180,9 @@ document.getElementById('cb-drift').addEventListener('change', (e) => {
 async function showPerfPhoto(idx) {
   currentPhotoIdx = idx;
   lastPhotoChangeTime = Date.now();
+  kaleidFlippedThisPhoto = false;
+  // Figure-8 frequency variety: 5% chance to shift ratio slightly each photo
+  freqRatio = autonomousMode && Math.random() < 0.05 ? 1.5 + Math.random() * 0.1 : 1.5;
   const file = queue[idx];
   initVignetteForPhoto(file.name);
   await loadPhotoToMesh(file);
@@ -1255,6 +1373,16 @@ ctrlChannel.addEventListener('message', (event) => {
     case 'tileScramble':    tileScramble    = value; break;
     case 'kaleidEnabled':   kaleidEnabled   = !!value; break;
     case 'kaleidFolds':     kaleidFolds     = Math.max(2, Math.min(8, Math.round(value))); break;
+    case 'kaleidZoom':      kaleidZoom      = value;   break;
+    case 'autonomousMode':
+      autonomousMode = !!value;
+      if (!autonomousMode) {
+        // Reset autonomous-only state so manual mode starts clean
+        kaleidRotationAngle = 0;
+        kaleidZoom          = 1.0;
+        boostFrames         = 0;
+      }
+      break;
     case 'dropMode':
       dropMode = !!value;
       if (appMode === 'performance') {

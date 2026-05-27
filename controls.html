@@ -244,12 +244,69 @@
       border-color: rgba(200,50,50,0.40);
       box-shadow: 0 0 12px rgba(200,30,30,0.12);
     }
+
+    /* ── Autonomous mode ── */
+    .auto-btn {
+      width: 100%;
+      font-family: monospace;
+      font-size: 11px;
+      letter-spacing: 0.08em;
+      padding: 10px 0;
+      border-radius: 6px;
+      border: 1px solid rgba(255,255,255,0.13);
+      background: rgba(255,255,255,0.04);
+      color: rgba(255,255,255,0.55);
+      cursor: pointer;
+      transition: all 0.25s;
+      margin-bottom: 14px;
+    }
+    .auto-btn.active {
+      background: rgba(80,200,120,0.13);
+      color: rgba(100,255,150,0.9);
+      border-color: rgba(80,200,120,0.38);
+      box-shadow: 0 0 16px rgba(80,200,120,0.09);
+    }
+    .mood-bar-row {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 8px;
+    }
+    .mood-bar-label {
+      width: 80px; font-size: 10px; color: rgba(255,255,255,0.38); letter-spacing: 0.04em;
+    }
+    .mood-bar-track {
+      flex: 1; height: 4px; background: rgba(255,255,255,0.07); border-radius: 2px; overflow: hidden;
+    }
+    .mood-bar-fill {
+      height: 100%; width: 0%; border-radius: 2px;
+      background: rgba(100,200,255,0.72); transition: width 0.15s ease-out;
+    }
+    .mood-bar-fill.sat { background: rgba(255,150,80,0.72); }
+    .hidden { display: none !important; }
+
+    /* When autonomous mode is active, dim all manual sections */
+    body.auto-active .manual-section { opacity: 0.28; pointer-events: none; }
+    body.auto-active .preset-bar     { opacity: 0.28; pointer-events: none; }
   </style>
 </head>
 <body>
 
 <h1>chooon-viz · controls</h1>
 <div id="status" class="disconnected">Disconnected</div>
+
+<!-- ── Autonomous Mode ───────────────────────────────────────────────────── -->
+<section>
+  <div class="section-title">Autonomous Mode</div>
+  <button class="auto-btn" id="btn-auto">⚙  Autonomous OFF</button>
+  <div id="auto-status" class="hidden">
+    <div class="mood-bar-row">
+      <div class="mood-bar-label">Mood</div>
+      <div class="mood-bar-track"><div class="mood-bar-fill" id="bar-mood"></div></div>
+    </div>
+    <div class="mood-bar-row">
+      <div class="mood-bar-label">Saturation</div>
+      <div class="mood-bar-track"><div class="mood-bar-fill sat" id="bar-sat"></div></div>
+    </div>
+  </div>
+</section>
 
 <!-- ── Presets ────────────────────────────────────────────────────────────── -->
 <div class="preset-bar">
@@ -259,7 +316,7 @@
 </div>
 
 <!-- ── Audio Monitor ─────────────────────────────────────────────────────── -->
-<section>
+<section class="manual-section">
   <div class="section-title">Audio Monitor</div>
 
   <div class="meter-row">
@@ -297,7 +354,7 @@
 </section>
 
 <!-- ── Echo ──────────────────────────────────────────────────────────────── -->
-<section>
+<section class="manual-section">
   <div class="section-title">Echo</div>
 
   <div class="param-row">
@@ -320,7 +377,7 @@
 </section>
 
 <!-- ── Performance ───────────────────────────────────────────────────────── -->
-<section>
+<section class="manual-section">
   <div class="section-title">Performance</div>
 
   <div class="param-row">
@@ -331,7 +388,7 @@
 </section>
 
 <!-- ── Effects ────────────────────────────────────────────────────────────── -->
-<section>
+<section class="manual-section">
   <div class="section-title">Effects</div>
 
   <div class="param-row">
@@ -348,7 +405,7 @@
 </section>
 
 <!-- ── Drop Detection ────────────────────────────────────────────────────── -->
-<section>
+<section class="manual-section">
   <div class="section-title">Drop Detection</div>
 
   <div class="toggle-row">
@@ -364,7 +421,7 @@
 </section>
 
 <!-- ── Vignette Morph ─────────────────────────────────────────────────────── -->
-<section>
+<section class="manual-section">
   <div class="section-title">Vignette Morph</div>
 
   <!-- Edge Pulse -->
@@ -407,7 +464,7 @@
 </section>
 
 <!-- ── Vignette Drift ─────────────────────────────────────────────────────── -->
-<section>
+<section class="manual-section">
   <div class="section-title">Vignette Drift</div>
 
   <div class="toggle-row">
@@ -423,7 +480,7 @@
 </section>
 
 <!-- ── Visual FX ──────────────────────────────────────────────────────────── -->
-<section>
+<section class="manual-section">
   <div class="section-title">Visual FX</div>
 
   <!-- Tile Scramble -->
@@ -596,6 +653,33 @@ toggles.forEach(({ id, key }) => {
     broadcast(key, cb.checked);
     clearPreset();   // manual change → deactivate preset highlight
   });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Autonomous mode
+// ═══════════════════════════════════════════════════════════════════════════════
+let isAutoMode = false;
+
+function setAutoMode(on) {
+  isAutoMode = on;
+  document.body.classList.toggle('auto-active', on);
+  document.getElementById('auto-status').classList.toggle('hidden', !on);
+  const btn = document.getElementById('btn-auto');
+  btn.textContent = on ? '🤖  Autonomous ON' : '⚙  Autonomous OFF';
+  btn.classList.toggle('active', on);
+  broadcast('autonomousMode', on);
+}
+
+document.getElementById('btn-auto').addEventListener('click', () => {
+  setAutoMode(!isAutoMode);
+});
+
+// Receive mood_status from visualizer.html
+channel.addEventListener('message', (event) => {
+  const msg = event.data;
+  if (!msg || msg.type !== 'mood_status') return;
+  document.getElementById('bar-mood').style.width = (msg.mood * 100).toFixed(1) + '%';
+  document.getElementById('bar-sat').style.width  = (msg.saturation * 100).toFixed(1) + '%';
 });
 
 // ═══════════════════════════════════════════════════════════════════════════════
