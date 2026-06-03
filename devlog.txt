@@ -110,3 +110,23 @@ Two new GLSL uniforms — uniform bool uDriftEnabled and uniform float uDriftSpe
 Per-photo persistence: driftEnabled (default false) and driftSpeed (default 0.1) are loaded in initVignetteForPhoto from photo_settings.json and written back in the Lock handler alongside the existing vignette params. A "Drift" checkbox (cb-drift) was added to #setup-controls next to the "Vignette" checkbox; showAdjustUI syncs it and its change handler calls updateShaderUniforms().
 
 Global runtime control: controls.html gained a "Vignette Drift" section with an "Enable Drift" toggle and a "Drift Speed" slider (0.02–0.5, default 0.1). The BroadcastChannel driftEnabled case updates the JS state, syncs the setup checkbox, and calls updateShaderUniforms(); driftSpeed directly patches photoMesh.material.uniforms.uDriftSpeed.value. The Drift preset enables drift at speed 0.1, Pulse leaves it off, Storm enables it at speed 0.25.
+
+Session 13 summary:
+
+The autonomous mood-driven system is complete and pushed. Here's what was added:
+
+visualizer.html — full autonomous engine in animate():
+
+Mood EMA (τ=3s): 0.3×volume + 0.4×beat_strength + 0.3×avg_spectral_energy
+Saturation EMA (τ=1s): counts active visual components (kaleid+zoom, wobble, pulse, drift, tile)
+Mood curves drive: kaleid zoom/rotation, pulse, wobble, breathe, drift size/speed, tile, effect intensity
+5-frame saturation boost when undersaturated at high mood
+Kaleid direction flip on 0.4/0.7 threshold crossings, once per photo
+5% chance per photo to vary freqRatio (1.5–1.6) for figure-8 variety
+Mood status broadcast to controls.html every 200ms
+controls.html — autonomous mode UI:
+
+Large toggle button (#btn-auto) calling setAutoMode()
+Mood and saturation progress bars updated via channel.addEventListener('message') on mood_status
+body.auto-active class dims all manual-section elements and preset bar to opacity 0.28
+The Autonomous Mode section itself stays fully visible (removed manual-section class from it)
