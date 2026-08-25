@@ -371,7 +371,6 @@ function animate(ts = 0) {
   // 6. Swap echo ping-pong buffers
   const tmp = rtEchoA; rtEchoA = rtEchoB; rtEchoB = tmp;
 }
-animate();
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // Status chip
@@ -606,7 +605,7 @@ const feedbackFragShader = /* glsl */`
 
     // Additive blend — clamp prevents overexposure
     // Vignette's black edges ensure echo rings appear in dark border regions
-    gl_FragColor = clamp(current + previous * decay, 0.0, 1.0);
+    gl_FragColor = clamp(current * (1.0 - decay) + previous * decay, 0.0, 1.0);
   }
 `;
 
@@ -1419,6 +1418,7 @@ ctrlChannel.addEventListener('message', (event) => {
 // ═══════════════════════════════════════════════════════════════════════════════
 loadSettings();
 connect();
+animate();
 </script>
 </body>
 </html>

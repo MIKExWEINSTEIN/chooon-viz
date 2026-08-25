@@ -10,7 +10,8 @@ import asyncio
 import json
 import pathlib
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+import functools
 
 import websockets
 from audio import AudioAnalyzer
@@ -19,7 +20,7 @@ from audio import AudioAnalyzer
 SETTINGS_PATH = pathlib.Path(__file__).parent / 'photo_settings.json'
 
 # ── HTTP server (port 8080) ──────────────────────────────────────────────────
-class _Handler(BaseHTTPRequestHandler):
+class _Handler(SimpleHTTPRequestHandler):
     """Minimal HTTP handler for settings GET and POST."""
 
     def log_message(self, fmt, *args):  # silence default request logging
@@ -50,8 +51,7 @@ class _Handler(BaseHTTPRequestHandler):
                 self._send_cors()
                 self.end_headers()
         else:
-            self.send_response(404)
-            self.end_headers()
+            super().do_GET()
 
     def do_POST(self):
         if self.path == '/save_settings':
@@ -77,7 +77,8 @@ class _Handler(BaseHTTPRequestHandler):
 
 
 def _run_http_server():
-    server = ThreadingHTTPServer(('localhost', 8080), _Handler)
+    handler = functools.partial(_Handler, directory=str(pathlib.Path(__file__).parent))
+    server = ThreadingHTTPServer(('localhost', 8080), handler)
     print('HTTP server running on http://localhost:8080')
     server.serve_forever()
 
@@ -98,7 +99,7 @@ async def broadcast_loop(analyzer):
         if connected_clients:
             data = analyzer.get()
             msg = json.dumps({
-                "beat":          data.beat,
+                "beat":          bool(data.beat),
                 "beat_strength": round(float(data.beat_strength), 4),
                 "volume":        round(float(data.volume), 4),
                 "band_energy":   [round(float(x), 4) for x in data.band_energy],
@@ -106,12 +107,12 @@ async def broadcast_loop(analyzer):
                 "drop_detected": bool(data.drop_detected),
             })
             dead = set()
-            for ws in connected_clients:
+            for ws in connected_clients.copy():
                 try:
                     await ws.send(msg)
                 except Exception:
                     dead.add(ws)
-            connected_clients -= dead
+            connected_clients.difference_update(dead)
         await asyncio.sleep(0.016)  # ~60fps
 
 # ── Entry point ──────────────────────────────────────────────────────────────
